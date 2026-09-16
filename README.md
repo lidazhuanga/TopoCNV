@@ -39,8 +39,8 @@ TopoCNV 用于鼻咽癌放疗计划 CT 上三叉神经（CN V）的自动多分�
 
 ## 联系
 
-严森祥（通讯作者），浙江大学医学院附属第一医院放疗科  
-邮箱：yansenxiang@zju.edu.cn
+董凯奇，浙江大学医学院附属第一医院放疗科  
+邮箱：dongkaiqi2018@zju.edu.cn
 
 ## 引用
 
