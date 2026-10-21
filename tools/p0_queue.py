@@ -7,9 +7,10 @@ arm's fold 0 finishes first. Runs are spread across GPUs (at most --per_gpu of o
 fewest-ours then most-free first) and start only on cards with --min_free_mb free; the queue
 never signals any process, ours or other users'. A run is done when its fold dir has
 COMPLETED; a run that died is relaunched with --resume (latest_checkpoint.pth), up to
-MAX_ATTEMPTS times. State: log/<RUN_TAG>/queue_state.json, one log per run.
+MAX_ATTEMPTS times. Each time more runs complete, tools/p0_summary.py refreshes the main table
+in the background. State: log/<RUN_TAG>/queue_state.json, one log per run.
 
-  nohup python tools/p0_queue.py > log/p0_binary_y_20261020/queue.log 2>&1 &
+  nohup python tools/p0_queue.py >> log/p0_binary_y_20261020/queue.log 2>&1 &
   touch log/p0_binary_y_20261020/STOP   # stop launching new runs (running ones continue)
 """
 import argparse
@@ -65,10 +66,10 @@ def alive(pid):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--gpus", default="0,1,2,3,4,5,6,7", help="comma-separated GPU ids")
-    ap.add_argument("--per_gpu", type=int, default=1, help="max of our jobs per GPU")
-    ap.add_argument("--max_jobs", type=int, default=6)
-    ap.add_argument("--min_free_mb", type=int, default=30000, help="launch only if the GPU has this much free")
-    ap.add_argument("--job_mb", type=int, default=20000, help="expected peak memory of one run")
+    ap.add_argument("--per_gpu", type=int, default=2, help="max of our jobs per GPU")
+    ap.add_argument("--max_jobs", type=int, default=8)
+    ap.add_argument("--min_free_mb", type=int, default=40000, help="launch only if the GPU has this much free")
+    ap.add_argument("--job_mb", type=int, default=16000, help="expected peak memory of one run")
     ap.add_argument("--poll", type=int, default=120)
     ap.add_argument("--folds", default="0,1,2,3,4")
     ap.add_argument("--arms", default=",".join(ARM_ORDER))
@@ -79,7 +80,8 @@ def main():
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
     gpus = args.gpus.split(",")
     jobs = [(a, int(f)) for f in args.folds.split(",") for a in args.arms.split(",")]
-    running = {}  # gpu -> (key, Popen)
+    running = {}  # pid -> (key, Popen)
+    summary, summarized = None, 0
 
     print(f"[{now()}] queue start: {len(jobs)} runs on GPUs {gpus}", flush=True)
     while True:
@@ -141,8 +143,21 @@ def main():
                 print(f"[{now()}] launched {key} on GPU {gpu} pid={proc.pid}", flush=True)
 
         state_path.write_text(json.dumps(state, indent=1))
+        # refresh the P0 main table (CPU) whenever more runs have completed
+        n_done = sum(s["status"] == "completed" for s in state.values())
+        if n_done > summarized and (summary is None or summary.poll() is not None):
+            summary = subprocess.Popen([sys.executable, str(ROOT / "tools" / "p0_summary.py")], cwd=ROOT,
+                                       stdout=open(LOG_DIR / "summary.log", "w"),
+                                       stderr=subprocess.STDOUT, start_new_session=True)
+            summarized = n_done
+            print(f"[{now()}] summary refresh started ({n_done} runs completed)", flush=True)
         unfinished = [k for k, s in state.items() if s["status"] not in ("completed", "failed")]
         if not running and (not unfinished or stop):
+            if summary is not None:
+                summary.wait()
+            if n_done > summarized:
+                subprocess.run([sys.executable, str(ROOT / "tools" / "p0_summary.py")], cwd=ROOT,
+                               stdout=open(LOG_DIR / "summary.log", "w"), stderr=subprocess.STDOUT)
             print(f"[{now()}] queue exit: unfinished={unfinished} stop={stop}", flush=True)
             break
         time.sleep(args.poll)
