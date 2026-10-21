@@ -55,7 +55,8 @@ def score(arm, force=False):
         with open(OUT / f"{arm}.log", "w") as log:
             subprocess.run(cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, check=True)
     with open(out_csv) as f:
-        return {r["case_id"]: r for r in csv.DictReader(f)}
+        # eval_protocol_metrics appends a MEAN row; keep per-case rows only
+        return {r["case_id"]: r for r in csv.DictReader(f) if r["case_id"] != "MEAN"}
 
 
 def fnum(x):
