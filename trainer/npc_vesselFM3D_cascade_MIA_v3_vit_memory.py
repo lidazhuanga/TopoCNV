@@ -463,6 +463,29 @@ def _load_stage1_softmax(stage1_pred_dir: Path, case_id: str):
         return None
 
 
+def _load_cascade_prior(stage1_pred_dir: Path, case_id: str):
+    """Stage-2 prior channels for one case, mmap; None if the Stage-1 prediction is missing.
+
+    Protocol: [P(c4), dilate(hard c4)] from the 6-class softmax. The prior is a fixed
+    function of the Stage-1 softmax, so it is computed once per case and cached next to
+    it; patch sampling then reads only its slice instead of the full softmax plus a
+    whole-volume argmax and dilation for every sample.
+    """
+    stage1_pred_dir = Path(stage1_pred_dir)
+    stage1_soft = _load_stage1_softmax(stage1_pred_dir, case_id)
+    if stage1_soft is None:
+        return None
+    if not _HAS_PROTOCOL_S2:
+        return stage1_soft[1:]
+    prior_path = stage1_pred_dir / f"{case_id}_cascade_prior.npy"
+    if not prior_path.exists():
+        prior = stage1_softmax_to_cascade_prior(np.asarray(stage1_soft), spacing_zyx=_PROT_SPACING)
+        tmp_path = str(prior_path) + f".tmp{os.getpid()}.npy"
+        np.save(tmp_path, prior.astype(np.float32))
+        os.replace(tmp_path, prior_path)
+    return np.load(prior_path, mmap_mode='r')
+
+
 class Stage2Dataset(Dataset):
     def __init__(self, cases, stage1_pred_dir, patch_size, cache_dir, training=True,
                  random_crop_prob=0.0, return_binary_y=False):
@@ -491,15 +514,10 @@ class Stage2Dataset(Dataset):
     def __getitem__(self, idx):
         case_id, _, _ = self.cases[idx]
         image_mm, _label_mm = _load_cached_case(case_id, self.cache_dir, mmap=True)
-        # Use npy cache for stage1 softmax (avoids NRRD parse every time)
-        s1_npy_path = _ensure_stage1_softmax_npy(self.stage1_pred_dir, case_id)
-        stage1_full = np.load(s1_npy_path, mmap_mode='r')  # [C,D,H,W] C=6 protocol or 3 legacy
         # Cascade Full prior: P(c4)+dilate(bony_roi=class4). class5_bypass excluded.
-        if _HAS_PROTOCOL_S2:
-            stage1_mm = stage1_softmax_to_cascade_prior(
-                np.asarray(stage1_full), spacing_zyx=_PROT_SPACING)
-        else:
-            stage1_mm = np.asarray(stage1_full)[1:]
+        stage1_mm = _load_cascade_prior(self.stage1_pred_dir, case_id)
+        if stage1_mm is None:
+            raise FileNotFoundError(f"Stage1 prediction not found for {case_id} in {self.stage1_pred_dir}")
         d, h, w = image_mm.shape
         pd, ph, pw = self.patch_size
         if stage1_mm.shape[1:] != (d, h, w):
@@ -1402,14 +1420,9 @@ def validate_stage2_sliding(model, cases, device, cache_dir, stage1_pred_dir, pa
         image_mm, label_mm = _load_cached_case(case_id, cache_dir, mmap=True)
         image = np.array(image_mm, dtype=np.float32)
         label_orig = np.array(label_mm, dtype=np.int16)  # original labels 0-5
-        stage1_soft = _load_stage1_softmax(stage1_pred_dir, case_id)
+        stage1_soft = _load_cascade_prior(stage1_pred_dir, case_id)
         if stage1_soft is None:
             continue
-        if _HAS_PROTOCOL_S2:
-            stage1_soft = stage1_softmax_to_cascade_prior(
-                np.asarray(stage1_soft), spacing_zyx=_PROT_SPACING)
-        else:
-            stage1_soft = stage1_soft[1:]
         if ZERO_STAGE1_PRIOR:
             stage1_soft = np.zeros_like(stage1_soft, dtype=np.float32)
         combined = np.concatenate([image[None], stage1_soft], axis=0)
@@ -1462,14 +1475,9 @@ def validate_stage2_patch(model, cases, device, cache_dir, stage1_pred_dir, patc
     pd, ph, pw = patch_size
     for case_id, _, _ in cases:
         image_mm, label_mm = _load_cached_case(case_id, cache_dir, mmap=True)
-        stage1_soft = _load_stage1_softmax(stage1_pred_dir, case_id)
+        stage1_soft = _load_cascade_prior(stage1_pred_dir, case_id)
         if stage1_soft is None:
             continue
-        if _HAS_PROTOCOL_S2:
-            stage1_soft = stage1_softmax_to_cascade_prior(
-                np.asarray(stage1_soft), spacing_zyx=_PROT_SPACING)
-        else:
-            stage1_soft = stage1_soft[1:]
         image = np.array(image_mm, dtype=np.float32)
         label_orig = np.array(label_mm, dtype=np.int16)
         if ZERO_STAGE1_PRIOR:
@@ -1664,14 +1672,9 @@ def _stage2_input(case_id, image, stage1_pred_dir):
     if B0_SINGLE_STAGE or stage1_pred_dir is None:
         return image[None]
     stage1_pred_dir = Path(stage1_pred_dir)
-    stage1_soft = _load_stage1_softmax(stage1_pred_dir, case_id)
+    stage1_soft = _load_cascade_prior(stage1_pred_dir, case_id)
     if stage1_soft is None:
         return None
-    if _HAS_PROTOCOL_S2:
-        stage1_soft = stage1_softmax_to_cascade_prior(
-            np.asarray(stage1_soft), spacing_zyx=_PROT_SPACING)
-    else:
-        stage1_soft = stage1_soft[1:]
     if PRIOR_SCRAMBLE_MODE not in ('0', 'none', 'off', '', None):
         try:
             seed = int(case_id) % (2 ** 31)

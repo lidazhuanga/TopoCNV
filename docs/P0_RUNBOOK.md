@@ -1,6 +1,6 @@
 # P0 Stage-2 运行手册（protocol v0.3，binary Y）
 
-启动于 2026-10-21 08:35（ztest2，`/cfs/zzkj/home/dkq/cnv/code/topocnv_remote`，conda env `topocnv`）。
+启动于 2026-10-21 08:35，08:52 带先验缓存重启（ztest2，`/cfs/zzkj/home/dkq/cnv/code/topocnv_remote`，conda env `topocnv`）。
 
 ## 跑什么
 
@@ -42,5 +42,11 @@ nohup python tools/p0_queue.py >> log/p0_binary_y_20261020/queue.log 2>&1 &
 ## 本轮修复
 
 - Stage-2 验证和推理改为通过 mmap 的 `.npy` 缓存读取 Stage-1 softmax，不再每次验证都对整折的 gzip NRRD
-  （每例约 870 MB）重新解压。只改了读取路径，读到的值完全相同。可用 `tools/prep_s1_npy.py` 预先生成缓存。
+  （每例约 870 MB）重新解压。只改了读取路径，读到的值完全相同。
+- 级联先验 [P(c4), dilate(hard c4)] 每例只计算一次，缓存为 `<case>_cascade_prior.npy`。原来训练时每取一个
+  patch 都要读入整个 6 通道 softmax（约 1 GB），再做一次全体积的 argmax 和 3 mm 膨胀；8 个 run 并发时，
+  GPU 利用率一直是 0%。改用缓存后，单个样本的读取从数秒降到 0.07 s。已抽查 02609977：缓存与直接从 NRRD
+  计算的结果逐体素完全相同。两种缓存都由 `tools/prep_s1_npy.py` 预先生成；缓存缺失时也会在首次访问时原子写出。
+- 第一次启动（08:35）的 9 个 run 停在第 1 个 epoch，尚无 checkpoint；已全部停掉，于 08:52 用先验缓存重新启动。
+  旧的队列状态保存在 `queue_state.pre_prior_cache.json`。
 - 补上 B0 的 `--stage1_pred_dir`（此前 B0 因找不到 Stage-1 目录而无法启动）。
