@@ -104,8 +104,9 @@ def train_args(name: str) -> str:
     cfg = CONFIGS[name]
     flags = dict(BASE_ARGS)
     flags["--exp_suffix"] = cfg["suffix"]
-    if not cfg.get("b0_single_stage"):
-        flags["--stage1_pred_dir"] = STAGE1_CV_DIR
+    # B0 needs the dir only because Stage2Dataset loads it; with --b0_single_stage 1 the
+    # network input is CT alone (in_channels=1) and the prior channels are dropped.
+    flags["--stage1_pred_dir"] = STAGE1_CV_DIR
     tokens = cfg["args"].split()
     i = 0
     while i < len(tokens):

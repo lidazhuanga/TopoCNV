@@ -116,7 +116,7 @@ def main():
                 if s["status"] == "running_orphan" and s.get("gpu") in ours:
                     ours[s["gpu"]] += 1
             free = gpu_free_mb()
-            while pending and len(running) < args.max_jobs:
+            while pending and sum(ours.values()) < args.max_jobs:
                 # spread: fewest of our jobs first, then most free memory; never touch other users' jobs
                 cands = [g for g in gpus if ours[g] < args.per_gpu and free.get(g, 0) >= args.min_free_mb]
                 if not cands:
