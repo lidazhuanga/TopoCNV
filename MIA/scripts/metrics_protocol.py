@@ -5,6 +5,7 @@ CNV protocol v0.3-confirmed evaluation helpers (Phase 1).
 Primary mask Y = labels in {1,2,3,4}.  # CNV protocol v0.3
 Primary metrics: Dice_Y + HD95_Y (optional ASSD_Y).
 L1: Dice_L, Recall_L, |L|/|Y|. Secondary: Dice_123, Dice_c4.
+Secondary_source: "pred" | "s1" | "N/A" (binary-only without multiclass source).
 FORBIDDEN as Primary: 5-class mean / soft-tree mean / class4-only.
 class5 = bypass_roi / class5_bypass
 (绕行/肌肉) is NOT in Y and NOT in L1.
@@ -291,6 +292,7 @@ def score_protocol(
     spacing_zyx: Sequence[float] = DEFAULT_SPACING_ZYX,
     *,
     pred_binary_Y: bool = False,
+    secondary_pred: Optional[ArrayLike] = None,
     r_mm: float = L1_DILATE_R_MM,
     hu_low: float = BONE_HU_LOW,
     hu_high: float = BONE_HU_HIGH,
@@ -299,8 +301,16 @@ def score_protocol(
 
     Returns dict with:
       Primary: Dice_Y, HD95_Y (ASSD_Y optional)
-      Secondary: Dice_123, Dice_c4
+      Secondary: Dice_123, Dice_c4 (+ Secondary_source)
       L1: Dice_L, Recall_L, L_over_Y  (nan if hu is None)
+
+    Secondary policy (protocol §13.1 / methods):
+      - binary-only Primary (B0 / SOTA / S2 binary_y) without a multiclass
+        secondary source → Dice_123/Dice_c4 = nan, Secondary_source = "N/A"
+      - cascade arms: pass Stage-1 **model** multiclass pred/argmax as secondary_pred
+        → Secondary_source = "s1"  (FORBIDDEN: never pass GT labels as secondary_pred)
+      - multiclass Primary **model** pred → Secondary from pred, Secondary_source = "pred"
+        (FORBIDDEN: GT masquerading as prediction)
     """
     gt = np.asarray(gt_labels)
     pY = pred_to_Y(pred, binary=pred_binary_Y)
@@ -308,14 +318,21 @@ def score_protocol(
     out: Dict[str, float] = {"Dice_Y": _dice(pY, gY)}
     out["HD95_Y"] = _hd95(pY, gY, spacing_zyx)
     out["ASSD_Y"] = _assd(pY, gY, spacing_zyx)
-    if pred_binary_Y:
-        # Secondary class splits require multiclass pred; nan when binary-only
+    if secondary_pred is not None:
+        sp = np.asarray(secondary_pred)
+        out["Dice_123"] = _dice(mask_123(sp), mask_123(gt))
+        out["Dice_c4"] = _dice(mask_c4(sp), mask_c4(gt))
+        out["Secondary_source"] = "s1"  # type: ignore[assignment]
+    elif pred_binary_Y:
+        # binary-only arm: Secondary explicitly N/A (nan for numeric aggregation)
         out["Dice_123"] = float("nan")
         out["Dice_c4"] = float("nan")
+        out["Secondary_source"] = "N/A"  # type: ignore[assignment]
     else:
         p = np.asarray(pred)
         out["Dice_123"] = _dice(mask_123(p), mask_123(gt))
         out["Dice_c4"] = _dice(mask_c4(p), mask_c4(gt))
+        out["Secondary_source"] = "pred"  # type: ignore[assignment]
 
     if hu is None:
         out["Dice_L"] = float("nan")
@@ -399,9 +416,14 @@ def score_case_from_paths(
     spacing_zyx: Sequence[float] = DEFAULT_SPACING_ZYX,
     *,
     pred_binary_Y: bool = False,
+    secondary_pred: Optional[ArrayLike] = None,
     load_hu: bool = True,
 ) -> Dict[str, float]:
-    """Score one case; optionally load raw HU for L1."""
+    """Score one case; optionally load raw HU for L1.
+
+    secondary_pred: optional multiclass labels (typically S1 argmax) used for
+    Dice_123 / Dice_c4 when Primary pred is binary Y (cascade arms).
+    """
     hu = None
     sp = tuple(spacing_zyx)
     if load_hu:
@@ -412,7 +434,8 @@ def score_case_from_paths(
             reference_shape_dhw=tuple(np.asarray(gt_labels).shape),
         )
     row = score_protocol(
-        pred, gt_labels, hu=hu, spacing_zyx=sp, pred_binary_Y=pred_binary_Y
+        pred, gt_labels, hu=hu, spacing_zyx=sp,
+        pred_binary_Y=pred_binary_Y, secondary_pred=secondary_pred,
     )
     row["case_id"] = case_id  # type: ignore[assignment]
     return row
@@ -442,9 +465,23 @@ def _self_test() -> None:
     pred[mask_bypass(gt)] = 0
     m = score_protocol(pred, gt, hu=hu, spacing_zyx=DEFAULT_SPACING_ZYX)
     assert m["Dice_Y"] > 0.99
+    assert m.get("Secondary_source") == "pred"
     assert "Dice_L" in m and "Recall_L" in m and "L_over_Y" in m
     assert "HD95_Y" in m and "ASSD_Y" in m
-    print("[metrics_protocol] self-test OK", {k: round(v, 4) if isinstance(v, float) else v for k, v in m.items()})
+
+    # binary-only → Secondary N/A
+    m_bin = score_protocol(mask_Y(pred), gt, hu=hu, spacing_zyx=DEFAULT_SPACING_ZYX,
+                           pred_binary_Y=True)
+    assert m_bin["Secondary_source"] == "N/A"
+    assert m_bin["Dice_123"] != m_bin["Dice_123"]  # nan
+
+    # cascade: Primary binary Y + S1 multiclass secondary
+    m_cas = score_protocol(mask_Y(pred), gt, hu=hu, spacing_zyx=DEFAULT_SPACING_ZYX,
+                           pred_binary_Y=True, secondary_pred=pred)
+    assert m_cas["Secondary_source"] == "s1"
+    assert m_cas["Dice_123"] > 0.99 and m_cas["Dice_c4"] > 0.99
+
+    print("[metrics_protocol] self-test OK", {k: (round(v, 4) if isinstance(v, float) else v) for k, v in m.items()})
 
 
 if __name__ == "__main__":

@@ -451,6 +451,18 @@ def _ensure_stage1_softmax_npy(stage1_pred_dir: Path, case_id: str) -> Path:
     return npy_path
 
 
+def _load_stage1_softmax(stage1_pred_dir: Path, case_id: str):
+    """Stage-1 softmax [C,D,H,W] via the mmap .npy cache (built once from NRRD); None if missing.
+
+    Reading the gzip NRRD costs ~1 GB of decompression per case, which made every
+    Stage-2 validation pass decompress the whole fold; the .npy holds identical values.
+    """
+    try:
+        return np.load(_ensure_stage1_softmax_npy(Path(stage1_pred_dir), case_id), mmap_mode='r')
+    except FileNotFoundError:
+        return None
+
+
 class Stage2Dataset(Dataset):
     def __init__(self, cases, stage1_pred_dir, patch_size, cache_dir, training=True,
                  random_crop_prob=0.0, return_binary_y=False):
@@ -1390,13 +1402,8 @@ def validate_stage2_sliding(model, cases, device, cache_dir, stage1_pred_dir, pa
         image_mm, label_mm = _load_cached_case(case_id, cache_dir, mmap=True)
         image = np.array(image_mm, dtype=np.float32)
         label_orig = np.array(label_mm, dtype=np.int16)  # original labels 0-5
-        s1_path = stage1_pred_dir / f"{case_id}_stage1_softmax.nrrd"
-        s1_npy = stage1_pred_dir / f"{case_id}_stage1_softmax.npy"
-        if s1_path.exists():
-            stage1_soft = _load_softmax_nrrd(str(s1_path))
-        elif s1_npy.exists():
-            stage1_soft = np.load(s1_npy, mmap_mode='r')
-        else:
+        stage1_soft = _load_stage1_softmax(stage1_pred_dir, case_id)
+        if stage1_soft is None:
             continue
         if _HAS_PROTOCOL_S2:
             stage1_soft = stage1_softmax_to_cascade_prior(
@@ -1455,13 +1462,8 @@ def validate_stage2_patch(model, cases, device, cache_dir, stage1_pred_dir, patc
     pd, ph, pw = patch_size
     for case_id, _, _ in cases:
         image_mm, label_mm = _load_cached_case(case_id, cache_dir, mmap=True)
-        s1_path = stage1_pred_dir / f"{case_id}_stage1_softmax.nrrd"
-        s1_npy = stage1_pred_dir / f"{case_id}_stage1_softmax.npy"
-        if s1_path.exists():
-            stage1_soft = _load_softmax_nrrd(str(s1_path))
-        elif s1_npy.exists():
-            stage1_soft = np.asarray(np.load(s1_npy, mmap_mode='r'))
-        else:
+        stage1_soft = _load_stage1_softmax(stage1_pred_dir, case_id)
+        if stage1_soft is None:
             continue
         if _HAS_PROTOCOL_S2:
             stage1_soft = stage1_softmax_to_cascade_prior(
@@ -1662,13 +1664,8 @@ def _stage2_input(case_id, image, stage1_pred_dir):
     if B0_SINGLE_STAGE or stage1_pred_dir is None:
         return image[None]
     stage1_pred_dir = Path(stage1_pred_dir)
-    s1_path = stage1_pred_dir / f"{case_id}_stage1_softmax.nrrd"
-    s1_npy = stage1_pred_dir / f"{case_id}_stage1_softmax.npy"
-    if s1_path.exists():
-        stage1_soft = _load_softmax_nrrd(str(s1_path))
-    elif s1_npy.exists():
-        stage1_soft = np.asarray(np.load(s1_npy, mmap_mode='r'))
-    else:
+    stage1_soft = _load_stage1_softmax(stage1_pred_dir, case_id)
+    if stage1_soft is None:
         return None
     if _HAS_PROTOCOL_S2:
         stage1_soft = stage1_softmax_to_cascade_prior(

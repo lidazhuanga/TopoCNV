@@ -2,10 +2,15 @@
 """
 Thin eval wrapper for CNV protocol metrics (Phase 1).
 
-Scores pred vs gt using metrics_protocol.py (CNV protocol v0.3):
+Scores pred vs gt using metrics_protocol.py (CNV protocol v0.3 / §13.1):
   Primary: Dice_Y, HD95_Y
-  Secondary: Dice_123, Dice_c4
+  Secondary: Dice_123, Dice_c4 (+ Secondary_source)
   L1: Dice_L, Recall_L, L_over_Y
+
+Secondary policy:
+  - --pred_binary_Y without --s1_pred_dir → Secondary N/A (binary-only arms)
+  - --pred_binary_Y with --s1_pred_dir → Secondary from Stage-1 multiclass (cascade)
+  - multiclass pred → Secondary from pred
 
 Callable paths:
   1) From numpy arrays / .npy folders (standalone; no trained binary head needed)
@@ -60,6 +65,31 @@ def _load_pred(path: Path) -> np.ndarray:
     raise ValueError(f"Unsupported pred format: {path}")
 
 
+def _load_s1_multiclass(path: Path) -> np.ndarray:
+    """Load Stage-1 multiclass labels or softmax → argmax labels for Secondary."""
+    arr = _load_pred(path)
+    if arr.ndim == 4:
+        # [C,D,H,W] or [D,H,W,C] softmax
+        if arr.shape[0] <= 16 and arr.shape[0] < min(arr.shape[1:]):
+            return np.argmax(arr, axis=0).astype(np.int16)
+        if arr.shape[-1] <= 16:
+            return np.argmax(arr, axis=-1).astype(np.int16)
+        raise ValueError(f"Ambiguous 4D S1 array shape: {arr.shape}")
+    return arr.astype(np.int16)
+
+
+def _resolve_s1(s1_dir: Path, case_id: str):
+    candidates = [
+        s1_dir / f"{case_id}_stage1_label.npy",
+        s1_dir / f"{case_id}_stage1_label.nrrd",
+        s1_dir / f"{case_id}_stage1_softmax.npy",
+        s1_dir / f"{case_id}_stage1_softmax.nrrd",
+        s1_dir / f"{case_id}_pred.npy",
+        s1_dir / f"{case_id}.npy",
+    ]
+    return next((p for p in candidates if p.exists()), None)
+
+
 def main():
     ap = argparse.ArgumentParser(description="CNV protocol metrics eval (no train)")
     ap.add_argument("--self-test", action="store_true")
@@ -71,6 +101,9 @@ def main():
     ap.add_argument("--spacing", type=float, nargs=3, default=list(DEFAULT_SPACING_ZYX))
     ap.add_argument("--pred_binary_Y", action="store_true",
                     help="Predictions are already binary Y masks")
+    ap.add_argument("--s1_pred_dir", type=str, default=None,
+                    help="Stage-1 MODEL multiclass preds for Secondary (cascade); "
+                         "NOT ground-truth. Needed for Dice_123/c4 when --pred_binary_Y")
     ap.add_argument("--no_hu", action="store_true", help="Skip L1 (no raw HU load)")
     ap.add_argument("--csv", type=str, default=None)
     ap.add_argument("--limit", type=int, default=0, help="Max cases (0=all)")
@@ -108,17 +141,37 @@ def main():
         if pred.shape != gt.shape:
             print(f"[skip] shape mismatch {case_id}: pred={pred.shape} gt={gt.shape}")
             continue
+        secondary = None
+        if args.s1_pred_dir:
+            s1_path = _resolve_s1(Path(args.s1_pred_dir), case_id)
+            if s1_path is None:
+                print(f"[warn] no S1 secondary for {case_id}; Secondary→N/A")
+            else:
+                secondary = _load_s1_multiclass(s1_path)
+                if secondary.shape != gt.shape:
+                    print(f"[warn] S1 shape mismatch {case_id}: {secondary.shape} vs {gt.shape}; Secondary→N/A")
+                    secondary = None
+        elif args.pred_binary_Y:
+            # explicit N/A path; score_protocol sets Secondary_source
+            pass
+
         row = score_case_from_paths(
             case_id, pred, gt,
             data_root=args.data_root,
             spacing_zyx=args.spacing,
             pred_binary_Y=args.pred_binary_Y,
+            secondary_pred=secondary,
             load_hu=not args.no_hu,
         )
         rows.append(row)
+        src = row.get("Secondary_source", "?")
+        d123 = row["Dice_123"]
+        dc4 = row["Dice_c4"]
+        d123_s = "N/A" if src == "N/A" else f"{d123:.4f}"
+        dc4_s = "N/A" if src == "N/A" else f"{dc4:.4f}"
         print(
             f"{case_id}: Dice_Y={row['Dice_Y']:.4f} HD95_Y={row.get('HD95_Y', float('nan')):.2f} "
-            f"Dice_123={row['Dice_123']:.4f} Dice_c4={row['Dice_c4']:.4f} "
+            f"Dice_123={d123_s} Dice_c4={dc4_s} Secondary_source={src} "
             f"Dice_L={row['Dice_L']:.4f} Recall_L={row['Recall_L']:.4f} "
             f"L/Y={row['L_over_Y']:.4f}"
         )
@@ -129,20 +182,26 @@ def main():
 
     keys = ["Dice_Y", "HD95_Y", "ASSD_Y", "Dice_123", "Dice_c4", "Dice_L", "Recall_L", "L_over_Y"]
     means = {k: float(np.nanmean([r[k] for r in rows])) for k in keys}
+    sources = sorted({str(r.get("Secondary_source", "")) for r in rows})
     print("\n=== mean over", len(rows), "cases ===")
     for k, v in means.items():
-        print(f"  {k}: {v:.4f}")
+        if k in ("Dice_123", "Dice_c4") and sources == ["N/A"]:
+            print(f"  {k}: N/A")
+        else:
+            print(f"  {k}: {v:.4f}")
+    print(f"  Secondary_source: {','.join(sources) if sources else '?'}")
 
     if args.csv:
         out = Path(args.csv)
         out.parent.mkdir(parents=True, exist_ok=True)
-        fieldnames = ["case_id"] + keys
+        fieldnames = ["case_id"] + keys + ["Secondary_source"]
         with open(out, "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
             w.writeheader()
             for r in rows:
                 w.writerow(r)
-            w.writerow({"case_id": "MEAN", **means})
+            mean_row = {"case_id": "MEAN", **means, "Secondary_source": ",".join(sources)}
+            w.writerow(mean_row)
         print(f"Wrote {out}")
 
 

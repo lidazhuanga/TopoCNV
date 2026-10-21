@@ -14,3 +14,8 @@ log/
 *.pth
 *.pt
 *.ckpt
+
+# machine-local / patient identifiers
+logs/
+extras/
+env_cnv.sh
