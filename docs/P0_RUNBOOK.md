@@ -1,6 +1,6 @@
 # P0 Stage-2 运行手册（protocol v0.3，binary Y）
 
-启动于 2026-10-21 08:35，08:52 带先验缓存重启（ztest2，`/cfs/zzkj/home/dkq/cnv/code/topocnv_remote`，conda env `topocnv`）。
+启动于 2026-10-21 08:35，08:52 带先验缓存重启，09:08 以无缓冲日志从头重跑（ztest2，`/cfs/zzkj/home/dkq/cnv/code/topocnv_remote`，conda env `topocnv`）。
 
 ## 跑什么
 
@@ -49,4 +49,18 @@ nohup python tools/p0_queue.py >> log/p0_binary_y_20261020/queue.log 2>&1 &
   计算的结果逐体素完全相同。两种缓存都由 `tools/prep_s1_npy.py` 预先生成；缓存缺失时也会在首次访问时原子写出。
 - 第一次启动（08:35）的 9 个 run 停在第 1 个 epoch，尚无 checkpoint；已全部停掉，于 08:52 用先验缓存重新启动。
   旧的队列状态保存在 `queue_state.pre_prior_cache.json`。
+- 队列启动的 run 设置了 `PYTHONUNBUFFERED=1`。此前 stdout 是块缓冲的，日志里看不到 epoch 行。
+  08:52 那批 run 只跑了 2 个 epoch，09:08 删掉输出后从头重跑，让所有 run 的训练过程一致；
+  旧日志在 `log/p0_binary_y_20261020/aborted_0835_0852/`。
+  按这批 run 估算：首个 epoch（含冷缓存和验证）约 11 min，之后每个 epoch 约 1.1 min（8 个 run 并发）。
+
+## 解读注意
+
+- 训练日志里的 `val_Dice_Y` 是在中心 patch 上算的，只用于选 best checkpoint，会明显高估。
+  主表只用全体积 OOF 预测（`p0_summary.py`）。
+- Stage-1 的全体积 OOF 预测假阳性很多。例如 01501509 预测 102,585 个 Y 体素，真值只有 6,029 个；
+  全体积 Y Dice 为 0.08–0.39（抽查 3 例），而 Stage-1 日志里的 patch 验证 Dice 约 0.58。
+  已排除 NRRD 方向问题（交换 H/W 后 Dice 降到约 0.01）。所以 Secondary（取自 Stage-1）的数值会偏低。
+- A2 的打乱方式：训练时在 patch 内做 `spatial_roll`，验证和推理时在整个体积上做。两者都破坏了空间对齐，
+  但不完全相同，写 Methods 时需要说明。
 - 补上 B0 的 `--stage1_pred_dir`（此前 B0 因找不到 Stage-1 目录而无法启动）。

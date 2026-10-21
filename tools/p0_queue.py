@@ -131,7 +131,7 @@ def main():
                 cmd[0] = sys.executable
                 if (fold_dir(arm, fold) / "latest_checkpoint.pth").exists():
                     cmd.append("--resume")
-                env = dict(os.environ, CUDA_VISIBLE_DEVICES=gpu)
+                env = dict(os.environ, CUDA_VISIBLE_DEVICES=gpu, PYTHONUNBUFFERED="1")
                 log = open(LOG_DIR / f"{key}.log", "a")
                 log.write(f"\n# [{now()}] GPU {gpu} attempt {state[key]['attempts'] + 1}\n# {' '.join(cmd)}\n")
                 log.flush()
