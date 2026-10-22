@@ -9,6 +9,8 @@ a markdown table with mean ± sd, folds completed, and paired Wilcoxon p vs Full
 
 L1 columns follow the v2 scoring (docs/METRICS_FIX_NOTES.md): Dice_L counts false
 positives outside H_bone; Dice_L_legacy is the v1 FN-only score (= 2R/(1+R)).
+Secondary (cascade arms): Stage-2 Y split by Stage-1 posteriors over classes 1..4 (s1_inY);
+the CSVs keep the old whole-volume Stage-1 argmax as Dice_123_s1full / Dice_c4_s1full.
 
   python tools/p0_summary.py                 # all arms; re-scores only when preds changed
   python tools/p0_summary.py --arms Full,C1  # subset
@@ -36,6 +38,8 @@ COLS = ["Dice_Y", "HD95_Y", "Dice_L", "Precision_L", "Recall_L", "L_over_Y",
         "Dice_L_legacy", "Dice_123", "Dice_c4"]
 COMMON_COLS = ["Dice_Y", "HD95_Y", "Dice_L", "Precision_L", "Recall_L", "Dice_L_legacy"]
 P_COLS = ["Dice_Y", "Dice_L"]
+# Columns a CSV must have to count as current; older CSVs are re-scored.
+REQUIRED = set(COLS) | {"Dice_123_s1full", "Dice_c4_s1full"}
 
 
 def pred_dir(arm):
@@ -58,7 +62,7 @@ def _stale(out_csv, newest):
         return True
     with open(out_csv) as f:
         header = next(csv.reader(f), [])
-    return not set(COLS) <= set(header)  # written by an older eval version
+    return not REQUIRED <= set(header)  # written by an older eval version
 
 
 def score(arm, out_dir, force=False):
@@ -135,6 +139,8 @@ def main():
              "p = paired Wilcoxon vs Full on the cases scored in both (n in brackets). "
              "Dice_L = Dice(P \\ H, Y \\ H) counts false positives outside H; "
              "Dice_L_legacy = v1 score Dice(P ∩ L, L) = 2·Recall_L/(1+Recall_L). "
+             "Dice_123 / Dice_c4 = predicted Y split by Stage-1 posteriors over classes 1–4 "
+             "(N/A for B0, which has no Stage-1). "
              "Only rows with folds 5/5 are final.", "",
              "| Arm | folds | n | " + " | ".join(COLS) + " | " + " | ".join(f"p {c}" for c in P_COLS) + " |",
              "|---|---|---|" + "---|" * (len(COLS) + len(P_COLS))]

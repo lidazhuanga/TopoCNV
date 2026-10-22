@@ -5,7 +5,8 @@ CNV protocol v0.3-confirmed evaluation helpers (Phase 1).
 Primary mask Y = labels in {1,2,3,4}.  # CNV protocol v0.3
 Primary metrics: Dice_Y + HD95_Y (optional ASSD_Y).
 L1: Dice_L, Precision_L, Recall_L, |L|/|Y| (+ Dice_L_legacy, Dice_H for audit).
-Secondary: Dice_123, Dice_c4.
+Secondary: Dice_123, Dice_c4. Binary-Y cascade arms: Stage-2 Y split by Stage-1
+posteriors (partition_Y_by_posterior, source "s1_inY").
 Secondary_source: "pred" | "s1" | "N/A" (binary-only without multiclass source).
 FORBIDDEN as Primary: 5-class mean / soft-tree mean / class4-only.
 class5 = bypass_roi / class5_bypass
@@ -300,6 +301,24 @@ def _assd(pred: np.ndarray, gt: np.ndarray, spacing_zyx: Sequence[float]) -> flo
     return float(0.5 * (dt_pred[b_gt].mean() + dt_gt[b_pred].mean()))
 
 
+def partition_Y_by_posterior(pred_Y: ArrayLike, s1_softmax: ArrayLike) -> np.ndarray:
+    """Secondary labels for a binary-Y cascade: split the Stage-2 Y by Stage-1 posteriors.
+
+    Inside pred_Y each voxel gets argmax_{c in 1..4} P_S1(c); outside it, 0. The union of
+    classes 1..4 therefore equals pred_Y exactly. s1_softmax is [C>=5, D, H, W] (may be an
+    mmap; only the bounding box of pred_Y is read).
+    """
+    pY = np.asarray(pred_Y, dtype=bool)
+    out = np.zeros(pY.shape, dtype=np.int16)
+    if not pY.any():
+        return out
+    idx = np.argwhere(pY)
+    bb = tuple(slice(a, b + 1) for a, b in zip(idx.min(0), idx.max(0)))
+    sub = np.asarray(s1_softmax[(slice(1, 5),) + bb])
+    out[bb] = np.where(pY[bb], np.argmax(sub, axis=0) + 1, 0)
+    return out
+
+
 def score_protocol(
     pred: ArrayLike,
     gt_labels: ArrayLike,
@@ -308,6 +327,7 @@ def score_protocol(
     *,
     pred_binary_Y: bool = False,
     secondary_pred: Optional[ArrayLike] = None,
+    secondary_source: str = "s1",
     r_mm: float = L1_DILATE_R_MM,
     hu_low: float = BONE_HU_LOW,
     hu_high: float = BONE_HU_HIGH,
@@ -323,8 +343,10 @@ def score_protocol(
     Secondary policy (protocol §13.1 / methods):
       - binary-only Primary (B0 / SOTA / S2 binary_y) without a multiclass
         secondary source → Dice_123/Dice_c4 = nan, Secondary_source = "N/A"
-      - cascade arms: pass Stage-1 **model** multiclass pred/argmax as secondary_pred
-        → Secondary_source = "s1"  (FORBIDDEN: never pass GT labels as secondary_pred)
+      - cascade arms (main table, decided 2026-10-22): secondary_pred =
+        partition_Y_by_posterior(Stage-2 Y, Stage-1 softmax), secondary_source = "s1_inY";
+        a raw Stage-1 argmax with the default "s1" is kept for audit only
+        (FORBIDDEN: never pass GT labels as secondary_pred)
       - multiclass Primary **model** pred → Secondary from pred, Secondary_source = "pred"
         (FORBIDDEN: GT masquerading as prediction)
     """
@@ -338,7 +360,7 @@ def score_protocol(
         sp = np.asarray(secondary_pred)
         out["Dice_123"] = _dice(mask_123(sp), mask_123(gt))
         out["Dice_c4"] = _dice(mask_c4(sp), mask_c4(gt))
-        out["Secondary_source"] = "s1"  # type: ignore[assignment]
+        out["Secondary_source"] = secondary_source  # type: ignore[assignment]
     elif pred_binary_Y:
         # binary-only arm: Secondary explicitly N/A (nan for numeric aggregation)
         out["Dice_123"] = float("nan")
@@ -433,6 +455,7 @@ def score_case_from_paths(
     *,
     pred_binary_Y: bool = False,
     secondary_pred: Optional[ArrayLike] = None,
+    secondary_source: str = "s1",
     load_hu: bool = True,
 ) -> Dict[str, float]:
     """Score one case; optionally load raw HU for L1.
@@ -452,6 +475,7 @@ def score_case_from_paths(
     row = score_protocol(
         pred, gt_labels, hu=hu, spacing_zyx=sp,
         pred_binary_Y=pred_binary_Y, secondary_pred=secondary_pred,
+        secondary_source=secondary_source,
     )
     row["case_id"] = case_id  # type: ignore[assignment]
     return row
@@ -498,6 +522,7 @@ def _self_test() -> None:
     assert m_cas["Dice_123"] > 0.99 and m_cas["Dice_c4"] > 0.99
 
     _self_test_L1(gt, hu)
+    _self_test_partition(gt)
 
     print("[metrics_protocol] self-test OK", {k: (round(v, 4) if isinstance(v, float) else v) for k, v in m.items()})
 
@@ -562,6 +587,32 @@ def _self_test_L1(gt: np.ndarray, hu: np.ndarray) -> None:
     m = score_protocol(Y.astype(np.uint8), gt, hu=None, pred_binary_Y=True)
     assert all(m[k] != m[k] for k in ("Dice_L", "Precision_L", "Recall_L", "Dice_L_legacy", "Dice_H"))
     print("[metrics_protocol] L1 v2 self-test OK")
+
+
+def _self_test_partition(gt: np.ndarray) -> None:
+    """A_inY Secondary: classes follow the Stage-1 posterior, union equals the Stage-2 Y."""
+    onehot = np.stack([(gt == c) for c in range(6)]).astype(np.float32)
+    Y = mask_Y(gt)
+    # Stage-1 posterior = GT one-hot; Stage-2 Y = GT Y → perfect Secondary
+    lab = partition_Y_by_posterior(Y, onehot)
+    assert np.array_equal(lab > 0, Y) and np.array_equal(lab[Y], gt[Y])
+    m = score_protocol(Y.astype(np.uint8), gt, pred_binary_Y=True, secondary_pred=lab,
+                       secondary_source="s1_inY")
+    assert m["Secondary_source"] == "s1_inY" and m["Dice_123"] == 1.0 and m["Dice_c4"] == 1.0
+    # Stage-1 says background/class5 everywhere: voxels in Y still get a class in 1..4
+    bg = np.zeros_like(onehot)
+    bg[0] = 0.9
+    bg[5] = 0.1
+    bg[2, Y] = 0.05
+    lab = partition_Y_by_posterior(Y, bg)
+    assert np.array_equal(lab > 0, Y) and set(np.unique(lab[Y])) == {2}
+    # Extra Stage-2 voxels outside the GT are labelled, voxels outside the Stage-2 Y are not
+    p = Y.copy()
+    p[0, 0, 0] = True
+    lab = partition_Y_by_posterior(p, onehot)
+    assert np.array_equal(lab > 0, p)
+    assert not partition_Y_by_posterior(np.zeros_like(Y), onehot).any()
+    print("[metrics_protocol] A_inY partition self-test OK")
 
 
 if __name__ == "__main__":

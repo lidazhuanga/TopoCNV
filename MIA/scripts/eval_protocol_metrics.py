@@ -10,7 +10,10 @@ Scores pred vs gt using metrics_protocol.py (CNV protocol v0.3 / §13.1):
 
 Secondary policy:
   - --pred_binary_Y without --s1_pred_dir → Secondary N/A (binary-only arms)
-  - --pred_binary_Y with --s1_pred_dir → Secondary from Stage-1 multiclass (cascade)
+  - --pred_binary_Y with --s1_pred_dir → Secondary = Stage-2 Y split by Stage-1 posteriors
+    over classes 1..4 (Secondary_source "s1_inY"; needs {case}_stage1_softmax.npy).
+    Audit columns Dice_123_s1full / Dice_c4_s1full keep the raw Stage-1 argmax over the
+    whole volume (the pre-2026-10-22 Secondary). --secondary_s1_full restores that as Secondary.
   - multiclass pred → Secondary from pred
 
 Callable paths:
@@ -44,6 +47,11 @@ sys.path.insert(0, str(REPO))
 from metrics_protocol import (  # noqa: E402
     DEFAULT_DATA_ROOT,
     DEFAULT_SPACING_ZYX,
+    _dice,
+    mask_123,
+    mask_c4,
+    partition_Y_by_posterior,
+    pred_to_Y,
     score_case_from_paths,
     score_protocol,
     _self_test,
@@ -105,6 +113,8 @@ def main():
     ap.add_argument("--s1_pred_dir", type=str, default=None,
                     help="Stage-1 MODEL multiclass preds for Secondary (cascade); "
                          "NOT ground-truth. Needed for Dice_123/c4 when --pred_binary_Y")
+    ap.add_argument("--secondary_s1_full", action="store_true",
+                    help="Secondary from the raw Stage-1 argmax over the whole volume (pre-2026-10-22)")
     ap.add_argument("--no_hu", action="store_true", help="Skip L1 (no raw HU load)")
     ap.add_argument("--csv", type=str, default=None)
     ap.add_argument("--limit", type=int, default=0, help="Max cases (0=all)")
@@ -142,19 +152,27 @@ def main():
         if pred.shape != gt.shape:
             print(f"[skip] shape mismatch {case_id}: pred={pred.shape} gt={gt.shape}")
             continue
-        secondary = None
+        secondary, sec_src, s1_full = None, "s1", None
         if args.s1_pred_dir:
-            s1_path = _resolve_s1(Path(args.s1_pred_dir), case_id)
-            if s1_path is None:
-                print(f"[warn] no S1 secondary for {case_id}; Secondary→N/A")
+            s1_dir = Path(args.s1_pred_dir)
+            s1_path = _resolve_s1(s1_dir, case_id)
+            if s1_path is not None:
+                s1_full = _load_s1_multiclass(s1_path)
+                if s1_full.shape != gt.shape:
+                    print(f"[warn] S1 shape mismatch {case_id}: {s1_full.shape} vs {gt.shape}")
+                    s1_full = None
+            if args.pred_binary_Y and not args.secondary_s1_full:
+                sm_path = s1_dir / f"{case_id}_stage1_softmax.npy"
+                sm = np.load(str(sm_path), mmap_mode="r") if sm_path.exists() else None
+                if sm is None or tuple(sm.shape[1:]) != gt.shape:
+                    print(f"[warn] no usable S1 softmax for {case_id}; Secondary→N/A")
+                else:
+                    secondary = partition_Y_by_posterior(pred_to_Y(pred, binary=True), sm)
+                    sec_src = "s1_inY"
             else:
-                secondary = _load_s1_multiclass(s1_path)
-                if secondary.shape != gt.shape:
-                    print(f"[warn] S1 shape mismatch {case_id}: {secondary.shape} vs {gt.shape}; Secondary→N/A")
-                    secondary = None
-        elif args.pred_binary_Y:
-            # explicit N/A path; score_protocol sets Secondary_source
-            pass
+                secondary = s1_full
+            if secondary is None and s1_full is None:
+                print(f"[warn] no S1 secondary for {case_id}; Secondary→N/A")
 
         row = score_case_from_paths(
             case_id, pred, gt,
@@ -162,8 +180,14 @@ def main():
             spacing_zyx=args.spacing,
             pred_binary_Y=args.pred_binary_Y,
             secondary_pred=secondary,
+            secondary_source=sec_src,
             load_hu=not args.no_hu,
         )
+        if s1_full is not None:
+            row["Dice_123_s1full"] = _dice(mask_123(s1_full), mask_123(gt))
+            row["Dice_c4_s1full"] = _dice(mask_c4(s1_full), mask_c4(gt))
+        else:
+            row["Dice_123_s1full"] = row["Dice_c4_s1full"] = float("nan")
         rows.append(row)
         src = row.get("Secondary_source", "?")
         d123 = row["Dice_123"]
@@ -183,7 +207,7 @@ def main():
         return
 
     keys = ["Dice_Y", "HD95_Y", "ASSD_Y", "Dice_123", "Dice_c4", "Dice_L", "Precision_L",
-            "Recall_L", "L_over_Y", "Dice_L_legacy", "Dice_H"]
+            "Recall_L", "L_over_Y", "Dice_L_legacy", "Dice_H", "Dice_123_s1full", "Dice_c4_s1full"]
     means = {k: float(np.nanmean([r[k] for r in rows])) for k in keys}
     sources = sorted({str(r.get("Secondary_source", "")) for r in rows})
     print("\n=== mean over", len(rows), "cases ===")
