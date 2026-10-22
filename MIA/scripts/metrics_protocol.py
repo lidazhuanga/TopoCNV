@@ -4,7 +4,8 @@ CNV protocol v0.3-confirmed evaluation helpers (Phase 1).
 
 Primary mask Y = labels in {1,2,3,4}.  # CNV protocol v0.3
 Primary metrics: Dice_Y + HD95_Y (optional ASSD_Y).
-L1: Dice_L, Recall_L, |L|/|Y|. Secondary: Dice_123, Dice_c4.
+L1: Dice_L, Precision_L, Recall_L, |L|/|Y| (+ Dice_L_legacy, Dice_H for audit).
+Secondary: Dice_123, Dice_c4.
 Secondary_source: "pred" | "s1" | "N/A" (binary-only without multiclass source).
 FORBIDDEN as Primary: 5-class mean / soft-tree mean / class4-only.
 class5 = bypass_roi / class5_bypass
@@ -14,7 +15,13 @@ L1 (low-evidence subset):
   CNV_GT = Y
   H_bone = bone_window_high_contrast(raw_HU) ∪ dilate(bony_roi=class4, r=3mm)
   L      = CNV_GT \\ H_bone
-  Report Dice_L, Recall_L, |L|/|Y|
+  Scoring (v2, 2026-10-21; L itself unchanged) — both masks restricted to ¬H_bone:
+    Dice_L        = Dice(P \\ H_bone, L)                 counts FP outside H_bone
+    Precision_L   = |P ∩ L| / |P \\ H_bone|
+    Recall_L      = |P ∩ L| / |L|
+    Dice_L_legacy = Dice(P ∩ L, L) = 2·Recall_L / (1 + Recall_L)   (v1, FN-only)
+    Dice_H        = Dice(P ∩ H_bone, Y ∩ H_bone)          complementary subset
+  P = predicted Y. v1 reported Dice_L_legacy under the name Dice_L.
 
 HU SOURCE (CRITICAL):
   Preprocess cache (`*_image.npy`) is percentile-normalized to [0,1] — NEVER
@@ -234,6 +241,14 @@ def _recall(pred: np.ndarray, gt: np.ndarray) -> float:
     return float(tp / n)
 
 
+def _precision(pred: np.ndarray, gt: np.ndarray) -> float:
+    pred = pred.astype(bool)
+    gt = gt.astype(bool)
+    n = pred.sum()
+    if n == 0:
+        return float("nan")
+    return float((pred & gt).sum() / n)
+
 
 def _hd95(pred: np.ndarray, gt: np.ndarray, spacing_zyx: Sequence[float]) -> float:
     """95th-percentile Hausdorff distance (mm). NaN if either empty."""
@@ -302,7 +317,8 @@ def score_protocol(
     Returns dict with:
       Primary: Dice_Y, HD95_Y (ASSD_Y optional)
       Secondary: Dice_123, Dice_c4 (+ Secondary_source)
-      L1: Dice_L, Recall_L, L_over_Y  (nan if hu is None)
+      L1: Dice_L, Precision_L, Recall_L, L_over_Y, Dice_L_legacy, Dice_H
+          (nan if hu is None)
 
     Secondary policy (protocol §13.1 / methods):
       - binary-only Primary (B0 / SOTA / S2 binary_y) without a multiclass
@@ -335,20 +351,20 @@ def score_protocol(
         out["Secondary_source"] = "pred"  # type: ignore[assignment]
 
     if hu is None:
-        out["Dice_L"] = float("nan")
-        out["Recall_L"] = float("nan")
-        out["L_over_Y"] = float("nan")
+        for k in ("Dice_L", "Precision_L", "Recall_L", "L_over_Y", "Dice_L_legacy", "Dice_H"):
+            out[k] = float("nan")
         return out
 
     Y, H, L = build_L1(gt, hu, spacing_zyx, r_mm=r_mm, hu_low=hu_low, hu_high=hu_high)
-    # Restrict pred/gt to L for Dice_L / Recall_L
-    # Dice_L: dice of pred∩L vs gt∩L, but standard is dice(pred, gt) restricted to
-    # evaluating only on L voxels as the GT subset:
-    #   Dice_L = 2|pred∩L ∩ gt∩L| / (|pred∩L| + |gt∩L|) with gt∩L = L
-    pred_L = pY & L
-    gt_L = L  # == gY & L
-    out["Dice_L"] = _dice(pred_L, gt_L)
-    out["Recall_L"] = _recall(pY, L)  # how much of L is recovered by pred Y
+    # Both masks restricted to the low-evidence complement ¬H: L = Y \ H on the GT
+    # side, P \ H on the prediction side, so FP outside H_bone count against Dice_L.
+    pred_L = pY & ~H
+    out["Dice_L"] = _dice(pred_L, L)
+    out["Precision_L"] = _precision(pred_L, L)
+    out["Recall_L"] = _recall(pY, L)
+    # v1 score: prediction clipped to L itself, so FP never count (= 2R/(1+R)).
+    out["Dice_L_legacy"] = _dice(pY & L, L)
+    out["Dice_H"] = _dice(pY & H, Y & H)
     y_n = int(Y.sum())
     out["L_over_Y"] = float(L.sum() / y_n) if y_n > 0 else float("nan")
     return out
@@ -481,7 +497,71 @@ def _self_test() -> None:
     assert m_cas["Secondary_source"] == "s1"
     assert m_cas["Dice_123"] > 0.99 and m_cas["Dice_c4"] > 0.99
 
+    _self_test_L1(gt, hu)
+
     print("[metrics_protocol] self-test OK", {k: (round(v, 4) if isinstance(v, float) else v) for k, v in m.items()})
+
+
+def _self_test_L1(gt: np.ndarray, hu: np.ndarray) -> None:
+    """L1 v2 scoring: FP outside H_bone lower Dice_L; FP inside H_bone do not."""
+    sp = DEFAULT_SPACING_ZYX
+    Y, H, L = build_L1(gt, hu, sp, r_mm=3.0)
+    assert L.any() and (Y & H).any(), "toy case must have both L and Y∩H voxels"
+
+    def run(p):
+        return score_protocol(p.astype(np.uint8), gt, hu=hu, spacing_zyx=sp, pred_binary_Y=True)
+
+    close = lambda a, b: abs(a - b) < 1e-9  # noqa: E731
+
+    # 1) perfect prediction
+    m = run(Y)
+    for k in ("Dice_L", "Precision_L", "Recall_L", "Dice_L_legacy", "Dice_H"):
+        assert close(m[k], 1.0), (k, m[k])
+
+    # 2) FP blob in soft tissue (outside H): only the new Dice_L / Precision_L see it
+    hu2 = hu.copy()
+    blob = np.zeros_like(Y)
+    blob[1:4, 24:30, 1:7] = True
+    hu2[blob] = 40.0
+    assert not (blob & Y).any()
+    Y2, H2, L2 = build_L1(gt, hu2, sp, r_mm=3.0)
+    assert not (blob & H2).any()
+    m = score_protocol((Y | blob).astype(np.uint8), gt, hu=hu2, spacing_zyx=sp, pred_binary_Y=True)
+    n_l, n_fp = int(L2.sum()), int(blob.sum())
+    assert close(m["Recall_L"], 1.0) and close(m["Dice_L_legacy"], 1.0)
+    assert close(m["Precision_L"], n_l / (n_l + n_fp)), m["Precision_L"]
+    assert close(m["Dice_L"], 2 * n_l / (2 * n_l + n_fp)), m["Dice_L"]
+    assert close(m["Dice_H"], 1.0)
+
+    # 3) FP inside H_bone (dilated class4 rim, not in Y): Dice_L untouched, Dice_H drops
+    rim = H & ~Y
+    assert rim.any()
+    m = run(Y | rim)
+    assert close(m["Dice_L"], 1.0) and close(m["Precision_L"], 1.0)
+    assert m["Dice_H"] < 1.0 and m["Dice_Y"] < 1.0
+
+    # 4) half of L missed, no FP: new Dice_L equals legacy = 2R/(1+R)
+    miss = L.copy()
+    idx = np.flatnonzero(miss)
+    miss.flat[idx[: len(idx) // 2]] = False   # keep second half of L
+    p = (Y & ~L) | miss
+    m = run(p)
+    r = miss.sum() / L.sum()
+    assert close(m["Recall_L"], r)
+    assert close(m["Dice_L_legacy"], 2 * r / (1 + r))
+    assert close(m["Dice_L"], m["Dice_L_legacy"]) and close(m["Precision_L"], 1.0)
+
+    # 5) legacy identity holds with FP too; empty prediction gives 0 / nan
+    m = run(Y | blob)
+    assert close(m["Dice_L_legacy"], 2 * m["Recall_L"] / (1 + m["Recall_L"]))
+    m = run(np.zeros_like(Y))
+    assert m["Dice_L"] == 0.0 and m["Recall_L"] == 0.0
+    assert m["Precision_L"] != m["Precision_L"]  # nan: no predicted voxels outside H
+
+    # 6) no HU → all L1 fields nan
+    m = score_protocol(Y.astype(np.uint8), gt, hu=None, pred_binary_Y=True)
+    assert all(m[k] != m[k] for k in ("Dice_L", "Precision_L", "Recall_L", "Dice_L_legacy", "Dice_H"))
+    print("[metrics_protocol] L1 v2 self-test OK")
 
 
 if __name__ == "__main__":

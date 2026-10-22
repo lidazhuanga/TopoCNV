@@ -5,7 +5,8 @@ Thin eval wrapper for CNV protocol metrics (Phase 1).
 Scores pred vs gt using metrics_protocol.py (CNV protocol v0.3 / §13.1):
   Primary: Dice_Y, HD95_Y
   Secondary: Dice_123, Dice_c4 (+ Secondary_source)
-  L1: Dice_L, Recall_L, L_over_Y
+  L1: Dice_L (FP-aware, v2), Precision_L, Recall_L, L_over_Y;
+      audit columns Dice_L_legacy (v1 FN-only score) and Dice_H
 
 Secondary policy:
   - --pred_binary_Y without --s1_pred_dir → Secondary N/A (binary-only arms)
@@ -172,7 +173,8 @@ def main():
         print(
             f"{case_id}: Dice_Y={row['Dice_Y']:.4f} HD95_Y={row.get('HD95_Y', float('nan')):.2f} "
             f"Dice_123={d123_s} Dice_c4={dc4_s} Secondary_source={src} "
-            f"Dice_L={row['Dice_L']:.4f} Recall_L={row['Recall_L']:.4f} "
+            f"Dice_L={row['Dice_L']:.4f} Precision_L={row['Precision_L']:.4f} "
+            f"Recall_L={row['Recall_L']:.4f} Dice_L_legacy={row['Dice_L_legacy']:.4f} "
             f"L/Y={row['L_over_Y']:.4f}"
         )
 
@@ -180,7 +182,8 @@ def main():
         print("No cases scored.")
         return
 
-    keys = ["Dice_Y", "HD95_Y", "ASSD_Y", "Dice_123", "Dice_c4", "Dice_L", "Recall_L", "L_over_Y"]
+    keys = ["Dice_Y", "HD95_Y", "ASSD_Y", "Dice_123", "Dice_c4", "Dice_L", "Precision_L",
+            "Recall_L", "L_over_Y", "Dice_L_legacy", "Dice_H"]
     means = {k: float(np.nanmean([r[k] for r in rows])) for k in keys}
     sources = sorted({str(r.get("Secondary_source", "")) for r in rows})
     print("\n=== mean over", len(rows), "cases ===")
