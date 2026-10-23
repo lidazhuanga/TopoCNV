@@ -119,12 +119,22 @@ Stage-2 训练用了 `--random_crop_prob 0.33`，见过背景 patch，所以最�
 | B_roiY | 不用真值；保留 Stage-1 自己的边界 | 多一个参数（10 mm）；多类并集与主预测 Y 不一致；仍留有 Y 附近的 Stage-1 假阳性 |
 | C_gtROI | 最直接地反映 Stage-1 本身的分类能力 | 用了真值定位，不能作为方法结果报告；各臂相同 |
 
-我的建议是 A_inY 作为 Secondary 主报，C_gtROI 作为“Stage-1 在神经附近的分类能力”放补充材料。这一点等主会话和用户拍板，
-目前主表里的 Dice_123 / Dice_c4 仍是 S0_full。
+**决定（用户，2026-10-22）**：A_inY 作为 Secondary 主报，C_gtROI 放补充材料（数字在 `secondary/options_<arm>.csv`
+和 `secondary/summary.md`）。实现：`metrics_protocol.partition_Y_by_posterior`，eval 在 `--pred_binary_Y --s1_pred_dir`
+下默认使用，`Secondary_source = s1_inY`。旧取法保留为 CSV 里的 `Dice_123_s1full` / `Dice_c4_s1full`，
+`--secondary_s1_full` 可以恢复旧行为。B0 没有 Stage-1，仍为 N/A。
+
+Methods 可用的英文描述：
+
+> **Secondary endpoints.** For the cascade models, the class-level output was obtained by splitting the predicted Y
+> with the Stage-1 posteriors: each voxel inside the predicted Y was assigned the class among 1–4 with the highest
+> Stage-1 probability, and voxels outside it were background. The union of classes 1–4 therefore equals the
+> primary prediction. Dice was computed for classes 1∪2∪3 and for class 4 separately. The single-stage model (B0)
+> has no class-level output, and its secondary endpoints are not reported.
 
 ## 5. 目录和运行说明
 
-- `results/p0_binary_y_eval_v2/`：v2 评分，主表 `P0_main_table.md`（含与 Full 的配对 Wilcoxon：Dice_Y 和 Dice_L，以及全部臂共有病例的子表）。
+- `results/p0_binary_y_eval_v2/`：v2 评分（L1 新定义 + Secondary A_inY），主表 `P0_main_table.md`（含与 Full 的配对 Wilcoxon：Dice_Y 和 Dice_L，以及全部臂共有病例的子表）。
   `tools/p0_summary.py` 现在默认写这里，P0 队列刷新主表时也写这里。
 - `results/p0_binary_y_eval/`：v1 的冻结快照（部分折，Dice_L 为旧定义），不再更新。2026-10-21 晚和 10-22 上午有两次进程
   在部署新代码后往这个目录写过 v2 列，已按 `Dice_L := Dice_L_legacy` 还原为 v1 口径。下游统计（`tools/p0_stats.py`）应改读 v2 目录。
@@ -138,3 +148,42 @@ Stage-2 训练用了 `--random_crop_prob 0.33`，见过背景 patch，所以最�
   正文 HD95 应报中位数 [IQR]，并考虑是否报告“去掉远处连通域”的后处理结果（需要另定规则，不能事后挑）。
 - HD95 在预测为空时返回 NaN（目前 P0 中没有出现），汇总规则需要在 Methods 里写明。
 - 类别 1–3 是可见度分层（1 = CT 可见神经，2 = MRI 引导神经，3 = 可能走行），代码注释和 README 里的 “V1/V2/V3” 是旧说法，本次没有改（不在本会话的文件范围内）。
+
+## 7. v0.4 新增指标（协议 v0.4-draft §6，2026-10-22）
+
+旧指标全部保留。新增列（`metrics_protocol.score_v04`）：
+
+| 列名 | 定义 |
+|---|---|
+| `SurfDice_Y` | Y 上的 surface Dice，容差 2 mm，按评估网格的物理间距 2.5×1.133×1.133 mm 计算 |
+| `Recall_vis` | \|P ∩ L_vis\| / \|L_vis\|，L_vis = 参考标注中类别 2∪3 |
+| `Dice_vis` | Dice(P ∩ R_vis, Y ∩ R_vis)，R_vis = dilate(L_vis, 3 mm)，R_vis 内的假阳性计入 |
+| `Lvis_over_Y` | \|L_vis\| / \|Y\|，描述性 |
+| `Dice_tier1`–`Dice_tier4` | 预测目录里有可见度头输出 `<case>_vis.npy` 或 `.nrrd`（0–4）时，逐层算 Dice；否则 NaN |
+
+实现细节：
+- surface Dice 用体素边界（一次 6 邻域腐蚀去掉的体素，与 HD95 相同），不是网格曲面面积加权。我在 10 个 Full 和 10 个 B0 病例上用 KD 树另写了一版核对，结果三位小数完全一致。两者都为空时记 NaN，只有一方为空时记 0。
+- R_vis 只由参考标注决定，所有方法用同一个区域。参考里没有类别 2/3 的病例，Recall_vis、Dice_vis 记 NaN。
+- 自测 `_self_test_v04` 覆盖：完美预测；x 方向平移 1 体素（1.13 mm，SurfDice 仍为 1）和 3 体素（下降）；z 方向平移 1 层（2.5 mm，下降）；空预测；R_vis 内单个假阳性（Dice_vis 精确等于 2n/(2n+1)）；R_vis 外假阳性（Dice_vis 不变）；漏掉类别 3；可见度头完美输出与 2/3 层互换；参考中无类别 2/3。
+- 抽查（Full、B0 各 10 例）：SurfDice_Y 0.59–0.83，比 Dice_Y 高 0.12–0.20；类别 2∪3 占 Y 的 63–70%；Recall_vis 与 Recall_L 相差在 0.09 以内；旧指标与 v2 CSV 逐例一致（差为 0）。可见度头的读取路径用真值伪造的 `_vis.npy` 做了端到端检查，各层 Dice 都是 1。
+
+### Methods 可直接使用的英文描述（v0.4）
+
+> **Evaluation.** All metrics were computed on the evaluation grid of 2.5 × 1.133 × 1.133 mm. The primary endpoints
+> were the Dice similarity coefficient and the 95th-percentile Hausdorff distance (HD95) on the merged nerve mask
+> Y = classes 1∪2∪3∪4. We also report the surface Dice at a tolerance of 2 mm (Nikolov et al., 2021): the
+> boundary voxels of the prediction and of the reference (voxels removed by one 6-connected erosion) were
+> extracted, and the surface Dice is the number of boundary voxels of either mask lying within 2 mm of the other
+> mask's boundary, divided by the total number of boundary voxels. Distances were computed in millimetres with
+> the anisotropic voxel spacing.
+>
+> **Non-visible segment.** The part of the nerve that is not directly visible on CT was defined from the reference
+> as L_vis = classes 2∪3 (MRI-guided nerve and probable course). We report recall_vis = |P ∩ L_vis| / |L_vis| and a
+> region-restricted Dice, Dice_vis = Dice(P ∩ R_vis, Y ∩ R_vis), where R_vis is L_vis dilated by 3 mm with an
+> ellipsoidal structuring element in physical units. R_vis depends only on the reference, so it is the same for
+> all methods; predicted voxels inside R_vis but outside Y count as false positives, whereas predictions far from
+> the non-visible segment do not affect Dice_vis. Cases without classes 2 or 3 in the reference were excluded from
+> these two metrics.
+>
+> **Visibility tiers.** For models with an auxiliary visibility output (labels 0–4), Dice was computed separately
+> for each tier (1, CT-visible nerve; 2, MRI-guided nerve; 3, probable course; 4, foramen/canal).

@@ -5,6 +5,10 @@ CNV protocol v0.3-confirmed evaluation helpers (Phase 1).
 Primary mask Y = labels in {1,2,3,4}.  # CNV protocol v0.3
 Primary metrics: Dice_Y + HD95_Y (optional ASSD_Y).
 L1: Dice_L, Precision_L, Recall_L, |L|/|Y| (+ Dice_L_legacy, Dice_H for audit).
+v0.4 (protocol v0.4-draft §6): SurfDice_Y (surface Dice @ 2 mm on Y);
+  invisible segment L_vis = GT classes 2∪3 → Recall_vis = |P∩L_vis|/|L_vis|,
+  Dice_vis = Dice(P∩R_vis, Y∩R_vis), R_vis = dilate(L_vis, 3 mm), Lvis_over_Y;
+  optional visibility-head output (0..4) → Dice_tier1..Dice_tier4.
 Secondary: Dice_123, Dice_c4. Binary-Y cascade arms: Stage-2 Y split by Stage-1
 posteriors (partition_Y_by_posterior, source "s1_inY").
 Secondary_source: "pred" | "s1" | "N/A" (binary-only without multiclass source).
@@ -61,6 +65,12 @@ BYPASS_ROI_LABEL: int = 5        # class5_bypass / bypass_roi — not in Y / L1
 L1_DILATE_R_MM: float = 3.0
 BONE_HU_LOW: float = 200.0
 BONE_HU_HIGH: float = 3000.0
+SURF_TOL_MM: float = 2.0         # surface Dice tolerance (v0.4)
+VIS_LABELS: Tuple[int, ...] = (2, 3)   # invisible segment: MRI-guided ∪ possible course
+VIS_DILATE_R_MM: float = 3.0
+TIER_LABELS: Tuple[int, ...] = (1, 2, 3, 4)
+V04_KEYS: Tuple[str, ...] = ("SurfDice_Y", "Recall_vis", "Dice_vis", "Lvis_over_Y") + tuple(
+    f"Dice_tier{k}" for k in TIER_LABELS)
 DEFAULT_DATA_ROOT = Path(os.environ.get(
     "CNV_DATA_ROOT", str(Path(__file__).resolve().parents[2] / "npc_data" / "train")))
 DEFAULT_SPACING_ZYX: Tuple[float, float, float] = (2.5, 1.1328120231628418, 1.1328120231628418)
@@ -319,6 +329,64 @@ def partition_Y_by_posterior(pred_Y: ArrayLike, s1_softmax: ArrayLike) -> np.nda
     return out
 
 
+def _surface_dice(pred: np.ndarray, gt: np.ndarray, spacing_zyx: Sequence[float],
+                  tol_mm: float = SURF_TOL_MM) -> float:
+    """Surface Dice at tolerance tol_mm (Nikolov et al. 2021), voxel-boundary version.
+
+    Boundaries are the mask voxels removed by one 6-connected erosion (same as HD95).
+    SD = (#∂P within tol of ∂G + #∂G within tol of ∂P) / (#∂P + #∂G).
+    Both empty → nan; exactly one empty → 0.
+    """
+    pred = np.asarray(pred, dtype=bool)
+    gt = np.asarray(gt, dtype=bool)
+    if not pred.any() and not gt.any():
+        return float("nan")
+    if not pred.any() or not gt.any():
+        return 0.0
+    from scipy.ndimage import binary_erosion, distance_transform_edt
+
+    sp = tuple(float(s) for s in spacing_zyx)
+    # crop to the union bounding box plus the tolerance margin (distances beyond tol are irrelevant)
+    idx = np.argwhere(pred | gt)
+    pad = [int(np.ceil(tol_mm / s)) + 2 for s in sp]
+    bb = tuple(slice(max(lo - m, 0), min(hi + m + 1, n))
+               for lo, hi, m, n in zip(idx.min(0), idx.max(0), pad, pred.shape))
+    p, g = pred[bb], gt[bb]
+    bp = p & ~binary_erosion(p, iterations=1, border_value=0)
+    bg = g & ~binary_erosion(g, iterations=1, border_value=0)
+    d_to_g = distance_transform_edt(~bg, sampling=sp)
+    d_to_p = distance_transform_edt(~bp, sampling=sp)
+    hit = (d_to_g[bp] <= tol_mm).sum() + (d_to_p[bg] <= tol_mm).sum()
+    return float(hit / (bp.sum() + bg.sum()))
+
+
+def score_v04(
+    pY: np.ndarray,
+    gt: np.ndarray,
+    spacing_zyx: Sequence[float],
+    vis_pred: Optional[ArrayLike] = None,
+) -> Dict[str, float]:
+    """v0.4 metrics: SurfDice_Y, Recall_vis, Dice_vis, Lvis_over_Y, Dice_tier1..4.
+
+    R_vis depends only on the reference, so it is the same for every method compared.
+    Dice_tier* are nan unless vis_pred (visibility-head labels 0..4) is given.
+    """
+    gY = mask_Y(gt)
+    out: Dict[str, float] = {"SurfDice_Y": _surface_dice(pY, gY, spacing_zyx)}
+    L_vis = np.isin(gt, VIS_LABELS)
+    if L_vis.any():
+        R_vis = dilate_mm(L_vis, spacing_zyx, r_mm=VIS_DILATE_R_MM)
+        out["Recall_vis"] = _recall(pY, L_vis)
+        out["Dice_vis"] = _dice(pY & R_vis, gY & R_vis)
+        out["Lvis_over_Y"] = float(L_vis.sum() / gY.sum())
+    else:
+        out["Recall_vis"] = out["Dice_vis"] = out["Lvis_over_Y"] = float("nan")
+    v = None if vis_pred is None else np.asarray(vis_pred)
+    for k in TIER_LABELS:
+        out[f"Dice_tier{k}"] = float("nan") if v is None else _dice(v == k, gt == k)
+    return out
+
+
 def score_protocol(
     pred: ArrayLike,
     gt_labels: ArrayLike,
@@ -328,6 +396,7 @@ def score_protocol(
     pred_binary_Y: bool = False,
     secondary_pred: Optional[ArrayLike] = None,
     secondary_source: str = "s1",
+    vis_pred: Optional[ArrayLike] = None,
     r_mm: float = L1_DILATE_R_MM,
     hu_low: float = BONE_HU_LOW,
     hu_high: float = BONE_HU_HIGH,
@@ -339,6 +408,7 @@ def score_protocol(
       Secondary: Dice_123, Dice_c4 (+ Secondary_source)
       L1: Dice_L, Precision_L, Recall_L, L_over_Y, Dice_L_legacy, Dice_H
           (nan if hu is None)
+      v0.4: SurfDice_Y, Recall_vis, Dice_vis, Lvis_over_Y, Dice_tier1..4 (see score_v04)
 
     Secondary policy (protocol §13.1 / methods):
       - binary-only Primary (B0 / SOTA / S2 binary_y) without a multiclass
@@ -371,6 +441,7 @@ def score_protocol(
         out["Dice_123"] = _dice(mask_123(p), mask_123(gt))
         out["Dice_c4"] = _dice(mask_c4(p), mask_c4(gt))
         out["Secondary_source"] = "pred"  # type: ignore[assignment]
+    out.update(score_v04(pY, gt, spacing_zyx, vis_pred=vis_pred))
 
     if hu is None:
         for k in ("Dice_L", "Precision_L", "Recall_L", "L_over_Y", "Dice_L_legacy", "Dice_H"):
@@ -456,6 +527,7 @@ def score_case_from_paths(
     pred_binary_Y: bool = False,
     secondary_pred: Optional[ArrayLike] = None,
     secondary_source: str = "s1",
+    vis_pred: Optional[ArrayLike] = None,
     load_hu: bool = True,
 ) -> Dict[str, float]:
     """Score one case; optionally load raw HU for L1.
@@ -475,7 +547,7 @@ def score_case_from_paths(
     row = score_protocol(
         pred, gt_labels, hu=hu, spacing_zyx=sp,
         pred_binary_Y=pred_binary_Y, secondary_pred=secondary_pred,
-        secondary_source=secondary_source,
+        secondary_source=secondary_source, vis_pred=vis_pred,
     )
     row["case_id"] = case_id  # type: ignore[assignment]
     return row
@@ -523,6 +595,7 @@ def _self_test() -> None:
 
     _self_test_L1(gt, hu)
     _self_test_partition(gt)
+    _self_test_v04(gt)
 
     print("[metrics_protocol] self-test OK", {k: (round(v, 4) if isinstance(v, float) else v) for k, v in m.items()})
 
@@ -613,6 +686,67 @@ def _self_test_partition(gt: np.ndarray) -> None:
     assert np.array_equal(lab > 0, p)
     assert not partition_Y_by_posterior(np.zeros_like(Y), onehot).any()
     print("[metrics_protocol] A_inY partition self-test OK")
+
+
+def _self_test_v04(gt: np.ndarray) -> None:
+    """Surface Dice @ 2 mm, invisible-segment metrics and per-tier Dice."""
+    sp = DEFAULT_SPACING_ZYX            # (2.5, 1.133, 1.133) mm
+    close = lambda a, b: abs(a - b) < 1e-9  # noqa: E731
+    Y = mask_Y(gt)
+    L_vis = np.isin(gt, VIS_LABELS)
+    R_vis = dilate_mm(L_vis, sp, r_mm=VIS_DILATE_R_MM)
+
+    def run(p, vis=None):
+        return score_protocol(p.astype(np.uint8), gt, spacing_zyx=sp, pred_binary_Y=True, vis_pred=vis)
+
+    m = run(Y)
+    for k in ("SurfDice_Y", "Recall_vis", "Dice_vis"):
+        assert close(m[k], 1.0), (k, m[k])
+    assert close(m["Lvis_over_Y"], L_vis.sum() / Y.sum())
+    assert all(m[f"Dice_tier{k}"] != m[f"Dice_tier{k}"] for k in TIER_LABELS)  # nan without vis head
+
+    # surface Dice: 1-voxel x shift (1.13 mm <= 2 mm) stays 1; 3-voxel shift (3.4 mm) drops; empty -> 0
+    assert close(run(np.roll(Y, 1, axis=2))["SurfDice_Y"], 1.0)
+    sd3 = run(np.roll(Y, 3, axis=2))["SurfDice_Y"]
+    assert 0.0 < sd3 < 1.0, sd3
+    assert run(np.zeros_like(Y))["SurfDice_Y"] == 0.0
+    nan_sd = _surface_dice(np.zeros_like(Y), np.zeros_like(Y), sp)
+    assert nan_sd != nan_sd
+    # one slice shift in z (2.5 mm > 2 mm): faces normal to z move out of tolerance
+    assert run(np.roll(Y, 1, axis=0))["SurfDice_Y"] < 1.0
+
+    # FP next to class 2 (inside R_vis, outside Y): Dice_vis drops, Recall_vis stays
+    fp = np.zeros_like(Y)
+    fp[9, 11, 13] = True
+    assert R_vis[9, 11, 13] and not Y[9, 11, 13]
+    m = run(Y | fp)
+    n = int((Y & R_vis).sum())
+    assert close(m["Recall_vis"], 1.0) and close(m["Dice_vis"], 2 * n / (2 * n + 1)), m["Dice_vis"]
+    # FP far away (outside R_vis): Dice_vis unchanged, Dice_Y drops
+    far = np.zeros_like(Y)
+    far[1:4, 24:30, 1:7] = True
+    assert not (far & R_vis).any()
+    m = run(Y | far)
+    assert close(m["Dice_vis"], 1.0) and m["Dice_Y"] < 1.0
+    # miss class 3 entirely: Recall_vis = |class2| / |class2 ∪ class3|
+    m = run(Y & ~(gt == 3))
+    assert close(m["Recall_vis"], (gt == 2).sum() / L_vis.sum()) and m["Dice_vis"] < 1.0
+
+    # visibility head: perfect labels -> every tier 1; swap tiers 2/3 -> those two drop to 0
+    vis = np.where(gt == 5, 0, gt)
+    m = run(Y, vis)
+    assert all(close(m[f"Dice_tier{k}"], 1.0) for k in TIER_LABELS)
+    sw = vis.copy()
+    sw[vis == 2] = 3
+    sw[vis == 3] = 2
+    m = run(Y, sw)
+    assert m["Dice_tier2"] == 0.0 and m["Dice_tier3"] == 0.0 and close(m["Dice_tier1"], 1.0)
+
+    # no class 2/3 in the reference -> vis metrics nan
+    g2 = np.where(np.isin(gt, VIS_LABELS), 1, gt)
+    m = score_protocol(mask_Y(g2).astype(np.uint8), g2, spacing_zyx=sp, pred_binary_Y=True)
+    assert m["Recall_vis"] != m["Recall_vis"] and m["Dice_vis"] != m["Dice_vis"]
+    print("[metrics_protocol] v0.4 self-test OK")
 
 
 if __name__ == "__main__":

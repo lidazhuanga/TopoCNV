@@ -38,8 +38,12 @@ COLS = ["Dice_Y", "HD95_Y", "Dice_L", "Precision_L", "Recall_L", "L_over_Y",
         "Dice_L_legacy", "Dice_123", "Dice_c4"]
 COMMON_COLS = ["Dice_Y", "HD95_Y", "Dice_L", "Precision_L", "Recall_L", "Dice_L_legacy"]
 P_COLS = ["Dice_Y", "Dice_L"]
+# v0.4 endpoints (protocol v0.4-draft §6); tiers only for arms with a visibility head
+V04_COLS = ["SurfDice_Y", "Recall_vis", "Dice_vis", "Lvis_over_Y",
+            "Dice_tier1", "Dice_tier2", "Dice_tier3", "Dice_tier4"]
+V04_P_COLS = ["SurfDice_Y", "Dice_vis"]
 # Columns a CSV must have to count as current; older CSVs are re-scored.
-REQUIRED = set(COLS) | {"Dice_123_s1full", "Dice_c4_s1full"}
+REQUIRED = set(COLS) | set(V04_COLS) | {"Dice_123_s1full", "Dice_c4_s1full"}
 
 
 def pred_dir(arm):
@@ -107,6 +111,8 @@ def fnum(x):
 
 def _cell(rows, col):
     v = np.array([fnum(x.get(col)) for x in rows])
+    if np.isnan(v).all():
+        return "N/A"
     v = v[~np.isnan(v)]
     return f"{v.mean():.4f} ± {v.std(ddof=1):.4f}" if len(v) > 1 else "N/A"
 
@@ -154,6 +160,22 @@ def main():
             common = sorted(set(full) & set(r))
             ps = [f"{_wilcoxon(full, r, c, common)} (n={len(common)})" for c in P_COLS]
         lines.append(f"| {arm} | {folds_done(arm)}/5 | {len(r)} | " + " | ".join(cells)
+                     + " | " + " | ".join(ps) + " |")
+
+    lines += ["", "## v0.4 endpoints", "",
+              "SurfDice_Y = surface Dice at 2 mm on Y. L_vis = reference classes 2∪3; "
+              "Recall_vis = |P ∩ L_vis| / |L_vis|; Dice_vis = Dice(P ∩ R_vis, Y ∩ R_vis) with "
+              "R_vis = dilate(L_vis, 3 mm). Dice_tier1–4: visibility-head output, N/A without one.", "",
+              "| Arm | n | " + " | ".join(V04_COLS) + " | " + " | ".join(f"p {c}" for c in V04_P_COLS) + " |",
+              "|---|---|" + "---|" * (len(V04_COLS) + len(V04_P_COLS))]
+    for arm, r in rows.items():
+        if not r:
+            continue
+        ps = ["—"] * len(V04_P_COLS)
+        if full and arm != "Full":
+            common = sorted(set(full) & set(r))
+            ps = [f"{_wilcoxon(full, r, c, common)} (n={len(common)})" for c in V04_P_COLS]
+        lines.append(f"| {arm} | {len(r)} | " + " | ".join(_cell(r.values(), c) for c in V04_COLS)
                      + " | " + " | ".join(ps) + " |")
 
     scored = {a: r for a, r in rows.items() if r}

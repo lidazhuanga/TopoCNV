@@ -7,6 +7,8 @@ Scores pred vs gt using metrics_protocol.py (CNV protocol v0.3 / §13.1):
   Secondary: Dice_123, Dice_c4 (+ Secondary_source)
   L1: Dice_L (FP-aware, v2), Precision_L, Recall_L, L_over_Y;
       audit columns Dice_L_legacy (v1 FN-only score) and Dice_H
+  v0.4: SurfDice_Y (surface Dice @ 2 mm), Recall_vis, Dice_vis, Lvis_over_Y;
+      Dice_tier1..4 when pred_dir has a visibility-head output {case}_vis.npy / _vis.nrrd (0..4)
 
 Secondary policy:
   - --pred_binary_Y without --s1_pred_dir → Secondary N/A (binary-only arms)
@@ -47,6 +49,7 @@ sys.path.insert(0, str(REPO))
 from metrics_protocol import (  # noqa: E402
     DEFAULT_DATA_ROOT,
     DEFAULT_SPACING_ZYX,
+    V04_KEYS,
     _dice,
     mask_123,
     mask_c4,
@@ -85,6 +88,14 @@ def _load_s1_multiclass(path: Path) -> np.ndarray:
             return np.argmax(arr, axis=-1).astype(np.int16)
         raise ValueError(f"Ambiguous 4D S1 array shape: {arr.shape}")
     return arr.astype(np.int16)
+
+
+def _resolve_vis(pred_dir: Path, case_id: str):
+    """Optional visibility-head labels (0..4) next to the Stage-2 prediction."""
+    for name in (f"{case_id}_vis.npy", f"{case_id}_vis.nrrd"):
+        if (pred_dir / name).exists():
+            return pred_dir / name
+    return None
 
 
 def _resolve_s1(s1_dir: Path, case_id: str):
@@ -174,6 +185,14 @@ def main():
             if secondary is None and s1_full is None:
                 print(f"[warn] no S1 secondary for {case_id}; Secondary→N/A")
 
+        vis = None
+        vis_path = _resolve_vis(pred_dir, case_id)
+        if vis_path is not None:
+            vis = _load_pred(vis_path).astype(np.int16)
+            if vis.shape != gt.shape:
+                print(f"[warn] vis shape mismatch {case_id}: {vis.shape} vs {gt.shape}; tiers→N/A")
+                vis = None
+
         row = score_case_from_paths(
             case_id, pred, gt,
             data_root=args.data_root,
@@ -181,6 +200,7 @@ def main():
             pred_binary_Y=args.pred_binary_Y,
             secondary_pred=secondary,
             secondary_source=sec_src,
+            vis_pred=vis,
             load_hu=not args.no_hu,
         )
         if s1_full is not None:
@@ -199,7 +219,8 @@ def main():
             f"Dice_123={d123_s} Dice_c4={dc4_s} Secondary_source={src} "
             f"Dice_L={row['Dice_L']:.4f} Precision_L={row['Precision_L']:.4f} "
             f"Recall_L={row['Recall_L']:.4f} Dice_L_legacy={row['Dice_L_legacy']:.4f} "
-            f"L/Y={row['L_over_Y']:.4f}"
+            f"L/Y={row['L_over_Y']:.4f} SurfDice_Y={row['SurfDice_Y']:.4f} "
+            f"Recall_vis={row['Recall_vis']:.4f} Dice_vis={row['Dice_vis']:.4f}"
         )
 
     if not rows:
@@ -207,7 +228,7 @@ def main():
         return
 
     keys = ["Dice_Y", "HD95_Y", "ASSD_Y", "Dice_123", "Dice_c4", "Dice_L", "Precision_L",
-            "Recall_L", "L_over_Y", "Dice_L_legacy", "Dice_H", "Dice_123_s1full", "Dice_c4_s1full"]
+            "Recall_L", "L_over_Y", "Dice_L_legacy", "Dice_H", "Dice_123_s1full", "Dice_c4_s1full"] + list(V04_KEYS)
     means = {k: float(np.nanmean([r[k] for r in rows])) for k in keys}
     sources = sorted({str(r.get("Secondary_source", "")) for r in rows})
     print("\n=== mean over", len(rows), "cases ===")
