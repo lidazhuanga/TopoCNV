@@ -1,0 +1,29 @@
+{
+  "name": "r0",
+  "arm": "r0",
+  "roi": {
+    "enabled": false
+  },
+  "priors": [],
+  "prior_shuffle": false,
+  "vis_head": {
+    "enabled": false
+  },
+  "skeleton": {
+    "enabled": false
+  },
+  "train": {
+    "epochs": 300,
+    "lr": 0.0005,
+    "batch_size": 2,
+    "patch": [
+      128,
+      128,
+      128
+    ],
+    "random_crop_prob": 0.33,
+    "full_val_every": 25,
+    "early_stop_checks": 6,
+    "step_size": 0.5
+  }
+}

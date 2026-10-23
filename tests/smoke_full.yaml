@@ -1,0 +1,37 @@
+{
+  "name": "smoke_full",
+  "arm": "smoke_full",
+  "roi": {
+    "enabled": true,
+    "margin_mm": 25
+  },
+  "priors": [
+    "a",
+    "b",
+    "c"
+  ],
+  "prior_shuffle": false,
+  "vis_head": {
+    "enabled": true,
+    "class5": "ignore",
+    "weight": 0.5
+  },
+  "skeleton": {
+    "enabled": true,
+    "weight": 1.0
+  },
+  "train": {
+    "epochs": 300,
+    "lr": 0.0005,
+    "batch_size": 2,
+    "patch": [
+      128,
+      128,
+      128
+    ],
+    "random_crop_prob": 0.33,
+    "full_val_every": 25,
+    "early_stop_checks": 6,
+    "step_size": 0.5
+  }
+}
