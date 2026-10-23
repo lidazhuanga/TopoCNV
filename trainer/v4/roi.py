@@ -2,7 +2,7 @@
 
 Stage-1 landmarks (argmax in {class 1, class 4}) -> split at the head midline (from the CT, not from
 the landmarks) -> per side, drop far false positives by growing a cluster from the largest component
-(components of >= min_vox voxels within link_mm of the cluster join it) -> per-side bounding box,
+(components of >= min_vox voxels within link_mm = 45 mm of the cluster join it) -> per-side bounding box,
 expanded by m mm. The ROI is the union of the two side boxes. A side without landmarks gets the other
 side's box mirrored about the midline; with no landmarks at all there is no ROI (whole volume).
 """
@@ -13,7 +13,7 @@ from .common import LR_AXIS, MARGINS_MM, SPACING, expand_box, mask_bbox
 
 BODY_THR = 0.3  # percentile-normalised CT: air ~0, soft tissue ~0.63
 MIN_VOX = 10
-LINK_MM = 30.0
+LINK_MM = 45.0  # GT landmark components per side are up to ~40 mm apart (T_0 - V_0: p99 39.5 mm)
 _CONN26 = np.ones((3, 3, 3), dtype=bool)
 
 

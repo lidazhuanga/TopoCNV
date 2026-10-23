@@ -11,14 +11,14 @@ from trainer.v4.roi import clean_cluster, compute_case_roi, coverage, margin_vox
 
 
 def synthetic():
-    shape = (60, 120, 100)
+    shape = (60, 120, 100)  # far FP at x 95-99 is > 45 mm from the side-0 cluster
     image = np.zeros(shape, np.float32)
     image[:, 20:100, 10:90] = 0.6  # body, LR centre 59.5
     lm = np.zeros(shape, bool)
     lm[28:32, 35:40, 45:50] = True   # side 0 landmark
     lm[28:32, 80:85, 45:50] = True   # side 1 landmark
     lm[29:32, 37:40, 58:61] = True   # side 0 second component (27 vox), ~9 mm away -> kept
-    lm[2:5, 25:28, 85:90] = True     # far false positive (> 30 mm) -> dropped
+    lm[2:5, 25:28, 95:100] = True    # far false positive (> 45 mm) -> dropped
     return image, lm
 
 
@@ -26,7 +26,7 @@ class TestROI(unittest.TestCase):
     def test_clean_and_boxes(self):
         image, lm = synthetic()
         rec, clean, c4 = compute_case_roi(lm, lm, image)
-        self.assertFalse(clean[2:5, 25:28, 85:90].any())
+        self.assertFalse(clean[2:5, 25:28, 95:100].any())
         self.assertTrue(clean[29:32, 37:40, 58:61].all())
         self.assertEqual([s["source"] for s in rec["sides"]], ["own", "own"])
         self.assertEqual(rec["sides"][0]["bbox"], [[28, 32], [35, 40], [45, 61]])
