@@ -76,6 +76,15 @@ class TestPriors(unittest.TestCase):
         self.assertGreater(prior[y].mean(), 0.7)
         self.assertLess(prior[~y].mean(), 0.02)
         self.assertEqual([i["how"] for i in info], ["side", "side"])
+        tr = atlas.target_transforms(tpl == 4, img)
+        bbs = atlas.support_bboxes(shape, tr, thr=0.5)
+        for s, y0 in ((0, 20), (1, 52)):
+            side = np.zeros(shape, bool)
+            side[:, y0:y0 + 6] = y[:, y0:y0 + 6]
+            gt = [[int(i.min()), int(i.max()) + 1] for i in np.nonzero(side)]
+            for (a, b), (c, d) in zip(bbs[s], gt):
+                self.assertLessEqual(abs(a - c), 1)
+                self.assertLessEqual(abs(b - d), 1)
 
 
 if __name__ == "__main__":

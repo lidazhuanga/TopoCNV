@@ -20,6 +20,7 @@ TEMPLATE_MARGIN_MM = 45.0
 MIN_ICP_POINTS = 20
 MAX_ICP_POINTS = 4000
 SCALE_BOUNDS = (0.8, 1.25)
+ATLAS_ROI_THR = 0.02  # atlas support threshold for the ROI (dev check 2026-10-23, V4_DEV_LOG)
 
 
 # ---------------- similarity ICP ----------------
@@ -183,37 +184,67 @@ class Atlas:
                 tot = tot - w.astype(np.float32)
         return tot / max(n, 1)
 
-    def warp_to_target(self, c4_pred_mask, image, region, exclude=None):
-        """Atlas resampled onto `region` of a target case, aligned by its predicted class-4 points.
-
-        Returns (prior float32 on region, per-side info dict)."""
-        shape = c4_pred_mask.shape
+    def target_transforms(self, c4_pred_mask, image):
+        """Per side: (T target mm -> template mm or None, info). ICP on the predicted class-4 points of
+        that side; a side with too few points uses one bilateral ICP; no points at all -> None."""
         mid = head_midline(image, None)
         pts = side_points(c4_pred_mask, mid, self.spacing)
         all_t = np.concatenate([p for p in pts if len(p)], 0) if any(len(p) for p in pts) else np.zeros((0, 3))
         all_tpl = np.concatenate(self.c4_pts, 0)
-        out = np.zeros(box_shape(region), np.float32)
-        g = self._grid_mm(region)
-        lr = g[:, LR_AXIS] / self.spacing[LR_AXIS]
-        info = []
-        for s, (a0, a1) in enumerate(side_slices(shape, mid)):
+        out = []
+        for s in (0, 1):
             if len(pts[s]) >= MIN_ICP_POINTS:
-                T, rmse = icp_similarity(pts[s], self.c4_pts[s])  # target mm -> template mm
+                T, rmse = icp_similarity(pts[s], self.c4_pts[s])
                 how = "side"
             elif len(all_t) >= MIN_ICP_POINTS:
                 T, rmse = icp_similarity(all_t, all_tpl)
                 how = "bilateral"
             else:
-                info.append({"side": s, "how": "none"})
+                out.append((None, {"side": s, "how": "none"}))
+                continue
+            out.append((T, {"side": s, "how": how, "scale": float(T[0]), "rmse_mm": rmse}))
+        return mid, out
+
+    def warp_to_target(self, c4_pred_mask, image, region, exclude=None, transforms=None):
+        """Atlas resampled onto `region` of a target case, aligned by its predicted class-4 points.
+
+        Returns (prior float32 on region, per-side info list)."""
+        shape = c4_pred_mask.shape
+        mid, tr = transforms if transforms is not None else self.target_transforms(c4_pred_mask, image)
+        out = np.zeros(box_shape(region), np.float32)
+        g = self._grid_mm(region)
+        lr = g[:, LR_AXIS] / self.spacing[LR_AXIS]
+        for s, (a0, a1) in enumerate(side_slices(shape, mid)):
+            T = tr[s][0]
+            if T is None:
                 continue
             sel = (lr >= a0) & (lr < a1)
             q = apply_sim(T, g[sel]) / self.spacing - np.asarray([b[0] for b in self.boxes[s]])
-            atl = self.side_atlas(s, exclude)
-            vals = ndi.map_coordinates(atl, q.T, order=1, mode="constant", cval=0.0)
+            vals = ndi.map_coordinates(self.side_atlas(s, exclude), q.T, order=1, mode="constant", cval=0.0)
             flat = out.reshape(-1)
             flat[np.nonzero(sel)[0]] = vals
-            info.append({"side": s, "how": how, "scale": float(T[0]), "rmse_mm": rmse})
-        return out, info
+        return out, [t[1] for t in tr]
+
+    def support_bboxes(self, shape, transforms, exclude=None, thr=ATLAS_ROI_THR):
+        """Per side: bounding box (target voxels) of the atlas support (atlas > thr) mapped into the
+        target by the inverse ICP transform, or None. Used as the v4 ROI (protocol §4, 2026-10-23)."""
+        _, tr = transforms
+        out = []
+        for s in (0, 1):
+            T = tr[s][0]
+            if T is None:
+                out.append(None)
+                continue
+            sc, R, t = T
+            sup = np.argwhere(self.side_atlas(s, exclude) > thr)
+            if len(sup) == 0:
+                out.append(None)
+                continue
+            q = (sup + np.asarray([b[0] for b in self.boxes[s]])) * self.spacing
+            p = ((q - t) @ R) / sc / self.spacing  # template mm -> target voxels (inverse similarity)
+            lo, hi = np.floor(p.min(0)).astype(int), np.ceil(p.max(0)).astype(int) + 1
+            out.append([[max(int(a), 0), min(int(b), int(n))] for a, b, n in zip(lo, hi, shape)])
+        return out
 
 
 def prior_box_from_rec(rec, margin):
@@ -223,13 +254,40 @@ def prior_box_from_rec(rec, margin):
     return union_box(boxes) if boxes else None
 
 
-def build_case_priors(p4, c4_clean, image, prior_box, atlas=None, exclude=None):
+def build_case_priors(p4, c4_clean, image, prior_box, atlas=None, exclude=None, transforms=None):
     """(3, *box) uint8 priors a/b/c on prior_box, and atlas warp info."""
     sl = box_slices(prior_box)
     a = np.asarray(p4[sl], dtype=np.float32)  # probabilities in [0, 1]
     b = dist_prior(c4_clean[sl])
     if atlas is not None:
-        c, info = atlas.warp_to_target(c4_clean, image, prior_box, exclude=exclude)
+        c, info = atlas.warp_to_target(c4_clean, image, prior_box, exclude=exclude, transforms=transforms)
     else:
         c, info = np.zeros_like(a), []
     return np.stack([to_uint8(a), to_uint8(b), to_uint8(c)]), info
+
+
+def atlas_roi_record(rec, atlas, c4_clean, image, exclude=None, thr=ATLAS_ROI_THR, margins=None):
+    """Replace the landmark side boxes of an ROI record by atlas-support boxes (protocol §4 as revised
+    2026-10-23: landmarks place the atlas by ICP, the atlas support + m mm is the ROI). The landmark
+    boxes are kept under 'landmark_boxes'. A side without a transform gets the other side mirrored."""
+    from .common import MARGINS_MM
+    from .roi import margin_vox, mirror_box
+    margins = margins or MARGINS_MM
+    shape = tuple(rec["shape"])
+    transforms = atlas.target_transforms(c4_clean, image)
+    bbs = atlas.support_bboxes(shape, transforms, exclude, thr)
+    srcs = ["atlas" if b is not None else "none" for b in bbs]
+    for s in (0, 1):
+        if bbs[s] is None and bbs[1 - s] is not None:
+            bbs[s] = mirror_box(bbs[1 - s], transforms[0], shape)
+            srcs[s] = "mirror"
+    for s, sd in enumerate(rec["sides"]):
+        sd["landmark_boxes"] = sd["boxes"]
+        sd["landmark_source"] = sd["source"]
+        sd["atlas_bbox"] = bbs[s]
+        sd["source"] = srcs[s]
+        sd["boxes"] = {str(m): (expand_box(bbs[s], margin_vox(m), shape) if bbs[s] is not None else None)
+                       for m in margins}
+    rec["roi_found"] = any(b is not None for b in bbs)
+    rec["roi_method"] = {"name": "atlas_support", "thr": thr}
+    return rec, transforms

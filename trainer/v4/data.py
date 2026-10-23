@@ -34,15 +34,21 @@ def load_fg(case_id):
     return np.stack([r // (h * w), (r % (h * w)) // w, r % w], axis=-1)
 
 
+def prior_dir(fold):
+    """results/v4_priors/<tag>: an int k means 'fold{k}' (DynUNet appendix runs); a str is the tag itself,
+    e.g. 'fold0_dev' / 'fold0_report' (nnU-Net main line)."""
+    return PRIORS_DIR / (fold if isinstance(fold, str) else f"fold{fold}")
+
+
 def load_roi_record(fold, case_id):
-    with open(PRIORS_DIR / f"fold{fold}" / f"{case_id}_roi.json") as f:
+    with open(prior_dir(fold) / f"{case_id}_roi.json") as f:
         return json.load(f)
 
 
 def load_prior(fold, case_id):
     """(uint8 array [3, *box], box) of a case's prior channels a/b/c in fold `fold`."""
     rec = load_roi_record(fold, case_id)
-    arr = np.load(PRIORS_DIR / f"fold{fold}" / f"{case_id}_prior.npy", mmap_mode="r")
+    arr = np.load(prior_dir(fold) / f"{case_id}_prior.npy", mmap_mode="r")
     return arr, rec["prior_box"]
 
 

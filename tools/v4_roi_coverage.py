@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """ROI coverage of GT Y for the v4 cascade (protocol v0.4 §4: target >= 99% of Y voxels).
 
-  python tools/v4_roi_coverage.py --folds 0,1 --set ival     # development: V_0 and V_1
-  python tools/v4_roi_coverage.py --folds 0,1 --set train    # T_k - V_k (ROI-cleaning check only)
-  python tools/v4_roi_coverage.py --folds 0,1,2,3,4 --set report   # after freezing: all 154 OOF cases
+  python tools/v4_roi_coverage.py --folds 0,1 --set ival --variant dev       # development: V_0 and V_1
+  python tools/v4_roi_coverage.py --folds 0,1 --set train --variant dev      # T_k - V_k
+  python tools/v4_roi_coverage.py --folds 0,1,2,3,4 --set report --variant report   # after freezing
 
 --set report is refused until configs/v4_frozen.yaml exists. Writes results/v4_roi_coverage/<set>_folds<..>.csv.
 """
@@ -26,6 +26,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--folds", default="0,1")
     ap.add_argument("--set", choices=["ival", "train", "report"], default="ival")
+    ap.add_argument("--variant", choices=["dev", "report"], default="dev",
+                    help="prior/ROI build: dev (atlas from T_k - V_k) or report (atlas from T_k)")
     args = ap.parse_args()
     if args.set == "report" and not (REPO / "configs" / "v4_frozen.yaml").exists():
         raise SystemExit("report-fold coverage only after configs/v4_frozen.yaml is committed")
@@ -34,7 +36,7 @@ def main():
         tr, iv = internal_split(k)
         cases = {"ival": iv, "train": tr, "report": report_cases(k)}[args.set]
         for c in cases:
-            rec = load_roi_record(k, c)
+            rec = load_roi_record(f"fold{k}_{args.variant}", c)
             gt = mask_Y(load_label(c))
             row = {"fold": k, "patient_id": c, "roi_found": rec["roi_found"],
                    "sides": "/".join(s["source"] for s in rec["sides"])}
@@ -44,7 +46,7 @@ def main():
             rows.append(row)
     out = RESULTS / "v4_roi_coverage"
     out.mkdir(parents=True, exist_ok=True)
-    path = out / f"{args.set}_folds{args.folds.replace(',', '')}.csv"
+    path = out / f"{args.variant}_{args.set}_folds{args.folds.replace(',', '')}.csv"
     with open(path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0]))
         w.writeheader()
