@@ -1,150 +1,153 @@
-# V4 实现计划（协议 v0.4-draft）
+# V4 实现计划（协议 v0.4-draft，2026-10-23 修订版）
 
-- 日期：2026-10-22
-- 依据：`D:\CNV\methods_redesign\CNV_protocol_v0.4-draft.md`（以它为准）、`METHOD_REDESIGN_v1.md`
+- 依据：`D:\CNV\methods_redesign\CNV_protocol_v0.4-draft.md`（以它为准，§3 已于 2026-10-23 修订）、`METHOD_REDESIGN_v1.md`
 - 负责会话：cnv-v4（由主会话管理）
 - 本文件只写"怎么做"。所有试过的配置和结果记在 `docs/V4_DEV_LOG.md`。
 
-## 0. 开工前查到的事实（只读分析，未训练）
+## 修订记录
 
-1. **缓存轴向**：`<case>_image.npy` 形状 (z, a1, a2)，间距 2.5 / 1.133 / 1.133 mm。**左右方向是第 1 轴**（类别 5 在第 1 轴上是双峰、中间为零），第 2 轴是前后。左右分侧一律按第 1 轴。
-2. **ROI 覆盖率的上限（用 GT 路标框，154 例）**：
+| 日期 | 改动 | 原因 |
+|---|---|---|
+| 2026-10-22 | 初版：DynUNet 骨干 | — |
+| 2026-10-23 | **主线改为 nnU-Net v2 框架**。R0 = 与对照完全相同的 nnU-Net v2；其他臂都是 nnU-Net v2 的自定义 trainer 和数据集。DynUNet 版只保留已在跑的 R0 fold 0，作附录里的骨干对照；DynUNet 的 R0 fold 1 已从队列撤掉 | SOTA 5 折：nnU-Net v2 Dice_Y 0.659、HD95 5.0 mm，DynUNet 0.636、9.5 mm。验收线约 0.679，以 DynUNet 为地基要涨 0.04 以上 |
+| 2026-10-23 | **ROI 改由图谱定义（待确认，见 §9 第 2 条）** | 真实 Stage 1 的路标框覆盖率只有 80–88%，见 §0 第 5 条 |
 
-   | 路标 | m = 15 mm | 25 mm | 35 mm |
+## 0. 已查到的事实
+
+1. **缓存轴向**：`<case>_image.npy` 形状 (z, a1, a2)，间距 2.5 / 1.133 / 1.133 mm。左右方向是第 1 轴。
+2. **nnU-Net v2 对照（Dataset501_CNVbinaryY）**：输入就是这份缓存（`nonorm`），plans 的目标间距与缓存相同，不重采样；3d_fullres，patch 56×192×192，batch 2，6 级 PlainConvUNet（32–320）；每 epoch 约 38 s，300 epoch 约 3.2 小时；取最后一个 checkpoint。预处理数据 39 GB。
+3. **用 GT 路标框的 ROI 覆盖率上限**：类别 1∪4 + 25 mm 为 99.97%，只用类别 4 + 35 mm 为 99.75%（最低 96.3%）。所以 Stage 1 学类别 1 和 4。
+4. **ROI 清理参数**：GT 路标每侧的连通域最多相距约 40 mm（T_0 − V_0：P99 39.5 mm），连接距离定为 45 mm（commit bceed15）。
+5. **真实 Stage 1 的质量（fold 0，DynUNet，150 epoch，内层 OOF，T_0 − V_0 的 105 例）**：类别 1 Dice 0.35，类别 4 Dice 0.47；预测的路标体积约为 GT 的 60%；预测框在 z 低端比 GT 框短了中位数 55 mm（P90 67 mm），漏掉了一整段路标。按协议原定义（路标外接框 + m）得到的 ROI 覆盖率：
+
+   | m | V_0（18 例）均值 / 最低 | T_0 − V_0（105 例）均值 |
+   |---|---|---|
+   | 15 | 67.9% / 46.5% | 66.1% |
+   | 25 | 79.7% / 64.4% | 78.2% |
+   | 35 | 87.6% / 78.4% | 86.0% |
+
+   远达不到 99% 的目标。
+6. **图谱定义的 ROI**（§4.1 的方案 B）：用预测的类别 4 点做 ICP，把训练折 Y 图谱（阈值 0.02）的支撑区映到当前病例，每侧取外接框 + m。同一份 Stage 1 预测下：
+
+   | m | V_0 均值 / 最低 | T_0 − V_0 均值 / 最低 | ROI 体积 |
    |---|---|---|---|
-   | 只用类别 4 | 均值 91.1%，最低 85.4% | 97.3%，最低 91.0% | 99.75%，最低 96.3%，92% 的病例 ≥ 99% |
-   | 类别 1∪4 | 99.4%，最低 91.5% | 99.97%，最低 98.8% | 100% |
+   | 15 | 99.96% / 99.3% | 99.65% / 93.6% | 3.3% |
+   | 25 | 100% / 100% | 99.98% / 99.5% | 4.7% |
+   | 35 | 100% / 100% | 100% / 100% | 6.3% |
 
-   ROI 体积只占全体积的 2–4%。
-   结论：只用类别 4，即使框是对的，m = 35 也有 8% 的病例达不到 99%。所以 **Stage 1 学类别 1 和 4**（协议 §4 写了"类别 4，可加类别 1"）。类别 4 概率仍单独作为先验通道 (a)。
-3. **SOTA DynUNet fold 0**（cnv-sota，按报告折选模型）：Dice_Y 0.6423，HD95_Y 12.6 mm，best epoch 275，单卡约 3.5 小时（其中每 25 epoch 一次 31 例的全体积验证）。
-4. 训练环境 `topocnv` 里没有 scikit-image（骨架化要用），也没有 PyYAML 和 pytest。不往共享环境里装：骨架预计算 `tools/v4_skeletons.py` 用 nnU-Net 的 venv（`~/cnv/envs/nnunetv2_cnv`，有 skimage 0.24）跑，只用到 numpy/scipy/skimage；`configs/*.yaml` 写成 JSON 风格（这也是合法的 YAML），用 `json` 读；测试用 `unittest`。
+7. 训练环境 `topocnv` 没有 scikit-image、PyYAML、pytest：骨架化放在 nnU-Net 的 venv 里做；`configs/*.yaml` 用 JSON 风格写；测试用 `unittest`。
 
-## 1. 文件结构
+## 1. 总体结构
 
 ```
-trainer/v4/
-  splits.py        折、内部验证集、Stage 1 内层折（全部由种子确定）
-  data.py          Stage 1 / Stage 2 数据集（缓存 CT + 先验 + ROI + 标签 + 骨架）
-  model.py         DynUNet（与 npc_sota_train.build_model('nnunet') 同配置，输入/输出通道可变）
-  losses.py        ROI 掩码版 WeightedBCEDice、可见度辅助损失、Skeleton Recall Loss
-  roi.py           由 Stage 1 概率求左右两侧外接框，清理远处假阳性
-  priors.py        先验通道 (a)(b)(c)：类别 4 概率、距离图、群体概率图谱（含相似变换 ICP）
-  infer.py         ROI 内滑窗推理、OOF 保存
-  train_stage1.py  Stage 1：3 类（背景 / 类别 1 / 类别 4）
-  train_stage2.py  Stage 2：R0 … Full-v4 全部臂共用一个入口，用配置开关部件
-tools/
-  v4_build_priors.py   某一折 Stage 1 完成后，生成该折全部 154 例的先验和 ROI
-  v4_roi_coverage.py   ROI 对 GT Y 的覆盖率
-  v4_queue.py          GPU 队列（规则见 §6）
-  v4_dev_summary.py    汇总内部验证结果到 V4_DEV_LOG
-tests/test_v4_*.py     单元测试和冒烟测试
-configs/v4_dev/*.yaml  开发阶段每个候选配置一份
-configs/v4_frozen.yaml 冻结配置
-results/v4_*/  log/v4_*/  docs/V4_*.md
+Stage 1（嵌套，照原计划：DynUNet 3 类，背景 / 类别 1 / 类别 4）
+   └→ tools/v4_build_priors.py：每折 154 例的 ROI 记录 + 先验 (a)(b)(c)      [已实现，fold 0 已完成]
+        └→ tools/v4_nnunet.py prep --fold k：写 nnU-Net 数据集 Dataset51k_CNVv4f{k}
+             （ROI 裁剪后的 CT + 3 个先验通道，标签为原始 0–5）
+             └→ nnUNetv2_train 51k 3d_fullres <split> -tr nnUNetTrainerV4_<arm>
+                  └→ tools/v4_nnunet.py export：贴回全体积、ROI 外清零 → results/v4_<arm>_label_predictions/
 ```
 
-R0 复现核对：主会话 2026-10-22 同意只看 R0 一个臂在报告折 fold 0 上的 Dice_Y/HD95，与 cnv-sota 的 DynUNet fold 0 对比。R0 是固定基线，不参与任何设计选择；这次访问记进 `docs/V4_DEV_LOG.md` 和 `log/v4/report_access.log`。其他臂冻结前不看报告折。
+新增文件（全部在我的目录内）：
 
-不改 `MIA/scripts/`、`trainer/npc_sota_train.py`、`tools/sota_*`、`tools/p0_*`。只 import 其中的函数（`metrics_protocol._dice/_hd95/mask_Y`、`npc_losses.WeightedBCEDiceLoss`、`npc_preprocess` 的增强函数）。
+```
+trainer/v4/nnunet/
+  trainer_v4.py     nnUNetTrainerV4 及各臂子类（通道开关、可见度头、骨架损失、按 Y 采样、导出）
+  skeleton.py       SkeletonTransform（按 Kirchhoff 2024 官方 nnU-Net 实现：增强后的 seg 骨架化 + 管状膨胀）
+  losses.py         Y 主损失（nnU-Net 原版 DC_and_CE）+ 可见度 DC_and_CE + Skeleton Recall
+tools/v4_nnunet.py  prep / train / export / install（把 trainer 链接进 venv 的 nnunetv2 包）
+tests/test_v4_nnunet_*.py
+```
+
+nnU-Net 的原始数据和结果放在 `~/cnv/nnunet_cnv/` 下，新 dataset ID 用 510–515（510 = Stage 1 备用，511–515 对应 fold 0–4）。**不动 Dataset501 及其结果。**
 
 ## 2. 划分
 
-- **报告折**：`extras/splits.json` 的 5 折（31/31/31/31/30 例），与 P0、SOTA 相同。
-- **内部验证集 V_k**：第 k 折的训练病例 T_k（123 或 124 例）按 ID 排序，用 `numpy.random.default_rng(20261022 + k)` 打乱，取前 round(0.15·|T_k|) 例（18 或 19 例）。Stage 2 只在 T_k − V_k 上训练，只按 V_k 选 checkpoint。
-- **Stage 1 内层折**：T_k 再分成 3 个内层折（种子 `20261022 + 100k`，V_k 也分在内层折里）。
+- 报告折：`extras/splits.json` 的 5 折。
+- 内部验证集 V_k：T_k 的 15%，种子 `20261022 + k`（实现不变）。
+- Stage 1 内层折：T_k 的 3 个内层折，种子 `20261022 + 100k`（实现不变）。
+- 每个 Dataset51k 的 `splits_final.json` 写两条：条目 0 = 报告用（train = T_k，val = 报告折 k），条目 1 = 开发用（train = T_k − V_k，val = V_k）。开发阶段只跑条目 1。
 
-## 3. Stage 1 怎么做到嵌套
+## 3. 选模型（待确认，见 §9 第 1 条）
 
-第 k 折的 Stage 1 一共训练 3 个模型，每个模型用 T_k 中另外两个内层折的病例训练：
+建议**沿用 nnU-Net 默认：取最后一个 epoch**（协议 §3 允许二选一）：
 
-- **T_k 里的每一例**（包括 V_k）：用没见过它的那个内层模型预测，即内层 OOF。Stage 2 的训练和内部验证都用这些预测。
-- **报告折病例**：3 个内层模型的概率取平均。3 个模型都没见过报告折。
+- 开发阶段：每个候选在 T_k − V_k 上训练，用最后一个 epoch 预测 V_k，在 V_k 上比较。
+- 报告阶段：冻结的配置在 T_k 上重新训练，用最后一个 epoch 预测报告折。
+- 好处：R0 就是 cnv-sota 已经跑完的 nnU-Net v2 5 折，训练数据、plans、epoch、选模型方式完全一致，不用重跑；Full-v4 和对照的训练数据也一样多。
+- 代价：开发阶段的 run 不能直接用于报告阶段，每个臂报告阶段都要重训 5 折。
+- 另一个选项（每 25 epoch 在 V_k 上按 Dice_Y 选）：所有臂（包括 R0）只用 T_k − V_k 训练，比对照少 15% 的训练数据，对 Full-v4 不利；R0 也要重跑 5 折。
 
-所以任何一例的 Stage 1 输入都来自没见过它的模型，报告折更是连 Stage 1 都没碰过。代价是报告折用的是 3 模型平均，比单模型略好、略平滑，这一点会写进 Methods。
+## 4. 部件在 nnU-Net v2 里的实现
 
-Stage 1 配方：DynUNet，3 类（背景、类别 1、类别 4；类别 2、3、5 当背景），128³ patch，`random_crop_prob 0.33`（旧 Stage 1 是 0，远处假阳性多半由此而来），WeightedBCEDice（类别权重 0.1/10/10），**固定 150 epoch、取最后一个 checkpoint，不做选择**，这样 Stage 1 不需要再嵌一层验证集。
+所有 Stage 2 臂共用 `nnUNetTrainerV4`（继承 `nnUNetTrainer_300epochs`，plans 从 Dataset501 复制，只把通道相关字段改成 4 通道 `NoNormalization`，patch、网络、batch、优化器、学习率、增强、epoch 全部不变）。各臂只在下面几处不同：
 
-每折 3 个 run，5 折共 15 个，每个约 1–1.5 小时（含预测约 70 例全体积）。
+### 4.1 ROI 级联（R1 及之后所有臂）
 
-## 4. 部件实现
-
-### 4.1 ROI 级联（R1）
-
-1. Stage 1 概率 → 路标掩码 L = argmax ∈ {1, 4}。
-2. 左右分侧：头部中线取自 CT（颅底层面的体轮廓在第 1 轴上的中点），不依赖 L，避免单侧假阳性带偏。
-3. 每侧去掉远处假阳性：取最大连通域，再并入与它最近距离 ≤ 30 mm、且 ≥ 10 体素的连通域，直到不再增加。这一步的参数在开发阶段只用 **T_0、T_1 训练病例的内层 OOF 预测**调，不看 Stage 2 结果，定了就写进冻结配置。
-4. 每侧外接框外扩 m mm，两个框的并集就是 ROI。某一侧没有路标时，用另一侧的框按中线镜像；两侧都没有就不裁剪（全体积），并记录。
-5. Stage 2 的做法：输入仍是全体积 CT（保留 128³ 的上下文），**patch 中心只在 ROI 内采样，损失只在 ROI 内的体素上计算**，推理只在 ROI 外接区域上滑窗，ROI 外一律置 0。这样 R0 和 R1 的骨干、patch、配方完全一样，差别只在 ROI。
-6. 覆盖率：`tools/v4_roi_coverage.py` 对每例输出 Y 体素覆盖率、ROI 体积。开发阶段报 V_0 ∪ V_1，报告阶段报全部 154 例的 OOF。
-
-m 的选法（预先写定）：在 V_0 ∪ V_1 上，取 {15, 25, 35} 中**平均覆盖率 ≥ 99% 的最小 m**；都达不到就取 35，并照实报告。不为每个 m 训练 Stage 2。
+- 预处理裁剪：每例只把 ROI 外接区域写进 nnU-Net 数据集，推理后贴回全体积，ROI 外为 0。ROI 小于 patch 的方向由 nnU-Net 自己补零。
+- ROI 的定义，两种方案：
+  - **方案 A（协议原文）**：Stage 1 路标外接框 + m。覆盖率 80–88%（§0 第 5 条），达不到 99%。
+  - **方案 B（建议）**：路标仍然决定位置——预测的类别 4 点和模板做 ICP——但外接框取的是映过来的训练折 Y 图谱支撑区（阈值 0.02，留一），每侧外接框 + m。覆盖率 99.98–100%（§0 第 6 条）。阈值 0.02 和 m 一起在内部验证上定：取平均覆盖率 ≥ 99% 的最小 m。
+- 这一步在开发阶段做完就定下 m，不为每个 m 训练 Stage 2。
 
 ### 4.2 先验通道（P）
 
-都在第 k 折内构建，只用 T_k 的标签：
-
-- (a) Stage 1 的类别 4 概率（ROI 外置 0）。
-- (b) 到预测骨孔的距离：对清理后的类别 4 掩码做各向异性 EDT（mm），截断在 30 mm，归一化为 1 − d/30。
-- (c) 群体概率图谱：
-  - 模板病例：T_k 里两侧类别 4 质心间距处于中位数的那一例。
-  - 每个 T_k 病例用 **GT 类别 4** 的点云，左右两侧分别做相似变换 ICP（旋转 + 各向同性缩放 + 平移，缩放限制在 0.8–1.25），把它的 Y 映到模板空间，取平均。
-  - 对目标病例，用 **Stage 1 预测的类别 4** 做同样的 ICP，把图谱映回目标空间。训练病例和测试病例都用预测的类别 4 对齐，训练和测试一致。
-  - 留一：T_k 里的病例（包括 V_k）用的图谱不含它自己的 Y；报告折用 T_k 全部病例的图谱。
-- 先验只存 ROI（m = 35）外接框内的部分，uint8 压缩，框外按 0 处理。
-
-组合的选法：见 §5 的 D2。
+- 数据集里固定写 3 个先验通道 (a)(b)(c)（实现与 fold 0 已生成的相同）。哪个组合由 trainer 决定：没选的通道在训练和推理时都置 0。网络结构对所有臂一样（4 个输入通道），R1、Full-v4 − P 就是 3 个先验通道全为 0。
+- 打乱先验：同一个数据集，先验通道换成按病例固定位移循环平移后的版本（另写一份数据集，ID 后缀用 `_shuf`）。
 
 ### 4.3 可见度辅助头（V）
 
-DynUNet 输出 2 + 5 = 7 个通道（同一个 1×1×1 输出卷积）：前 2 个是主输出 Y，后 5 个是背景 + 类别 1/2/3/4。辅助损失 = CE + soft Dice（不含背景），权重 λ_v 固定为 0.5（协议没有规定，我事先定下，不调）。类别 5 的两种处理：当背景，或在辅助损失里忽略（CE 和 Dice 都去掉这些体素）；在 D3 里选。主输出 Y 里类别 5 一律是背景（终点定义不变）。报告阶段另存辅助头的 argmax（ROI 内）供 Secondary。
+- 网络输出通道 2 + 5（每个深监督层都有），前 2 个是 Y，后 5 个是背景 + 类别 1/2/3/4。
+- 标签存原始 0–5。trainer 从中生成 Y 目标和可见度目标；类别 5 当背景或忽略（nnU-Net 的 ignore 机制）。
+- 损失：Y 用 nnU-Net 原版 DC_and_CE（含深监督权重），可见度头用同样的 DC_and_CE，权重 λ_v = 0.5（事先定死，不调）。
+- 采样：nnU-Net 默认按类别采前景。标签有 6 类时，类别 5 也会被当成前景采样，所以 trainer 改为把类别 1–4 合并成 Y 再采样，与对照（只有 Y 一类前景）一致。
 
 ### 4.4 Skeleton Recall Loss（S）
 
-按 Kirchhoff et al. (ECCV 2024)：对每例 GT Y 做 3D 骨架化，用 3×3×3 结构元膨胀一次成"管状骨架"，再与 Y 取交，预先存盘。损失 = 1 − Σ(p_Y · S) / (Σ S + ε)，在 batch 和空间上求和。总损失 = 主损失 + λ_v·辅助损失 + w·骨架损失，w 在 D4 里从 {0.5, 1.0} 选。
+照 Kirchhoff et al. (ECCV 2024) 的官方 nnU-Net 实现：在数据增强流水线里，空间变换之后对 Y 做 3D 骨架化，再膨胀成管状（`do_tube`），随深监督一起下采样；损失为 Y 概率在管状骨架上的软召回，权重 w ∈ {0.5, 1.0}。之前预计算的骨架（`results/v4_skel/`）只给 DynUNet 版用。
 
-### 4.5 打乱先验（Full-v4 + 打乱先验）
+### 4.5 导出
 
-沿用旧 A2 的 `spatial_roll`：先验通道在整个体积上按每例固定的随机位移循环平移（种子由病例 ID 决定），**训练和推理用同一个位移**（旧 A2 训练时在 patch 内打乱、推理时在全体积打乱，两者不一致，这里改掉）。ROI 不打乱。
+trainer 的最终验证改为：logits 的前 2 个通道 → Y（softmax argmax），后 5 个 → 可见度标签；用 nnU-Net 自己的导出函数还原 nonzero 裁剪，再由 `tools/v4_nnunet.py export` 按 ROI 框贴回全体积，写 `{case}_stage2_label.nrrd`（int16，缓存网格）。
 
-### 4.6 测试
+## 5. Stage 1（嵌套，照原计划）
 
-| 部件 | 测试 |
-|---|---|
-| splits | 5 折与 `extras/splits.json` 一致；V_k ⊂ T_k；报告折与 V_k、Stage 1 训练集都不相交；内层折覆盖 T_k |
-| losses | ROI 掩码全为 1 时与 `WeightedBCEDiceLoss` 数值一致；骨架损失在完美预测时为 0、全背景时为 1 |
-| roi | 合成体积：远处假团块被去掉；单侧缺失时镜像；外扩量按 mm 换算正确 |
-| priors | ICP 能恢复已知相似变换（误差 < 1 mm）；图谱留一不含自身；EDT 截断和归一化正确 |
-| model / train | 2 例、2 epoch 的冒烟训练跑通（R0、R1、Full-v4），输出能被 `eval_protocol_metrics.py --pred_binary_Y` 读取 |
+DynUNet 3 类，150 epoch，取最后一个 checkpoint，每折 3 个内层模型；报告折用 3 个模型的平均概率。fold 0 已完成，fold 1 在跑。
 
-## 5. 开发阶段（协议 §5）
+这个 Stage 1 偏弱（§0 第 5 条）。如果采用方案 B，ROI 不再依赖路标是否找全，Stage 1 的质量只影响先验 (a)(b) 和 ICP。要不要把 Stage 1 也换成 nnU-Net（3 类，每折 3 个 run，每个约 3.5 小时），见 §9 第 3 条。
 
-只用 fold 0、fold 1，只看 V_0、V_1。判据统一为：**V_0 ∪ V_1 合并后（约 37 例）的平均 Dice_Y**；与最好的候选差 < 0.003 时取更简单的那个；HD95_Y 一并记录，只作参考。按顺序贪心选择，每一步都在前一步选定的配置上做：
+## 6. 开发阶段（协议 §5）
+
+只用 fold 0、fold 1，只看 V_0、V_1。判据：V_0 ∪ V_1 合并（37 例）的平均 Dice_Y；与最好的候选差 < 0.003 时取更简单的；HD95_Y 只作参考。
 
 | 步 | 选什么 | 候选 | run 数 |
 |---|---|---|---|
-| D0 | 基线 | R0 | 2 |
-| D1 | ROI 外扩 m、ROI 清理参数 | {15, 25, 35}，按 §4.1 的覆盖率规则 | 0（只用 Stage 1）+ R1 2 个 |
-| D2 | 先验组合 | {a,b,c}、{b,c}、{a,c}、{a,b} | 8 |
-| D3 | 类别 5 在辅助头里的处理 | 当背景 / 忽略 | 4 |
-| D4 | 骨架损失权重 | 0.5 / 1.0 | 4 |
+| D0 | 参照 | R0（nnU-Net v2 原版，Dataset501 的开发条目） | 2 |
+| D1 | ROI 的 m（及方案 B 的阈值） | 覆盖率规则，不训练 | 0；另跑 R1 2 个作参照 |
+| D2 | 先验组合 | {a,b,c}、{b,c}、{a,c}、{a,b}（R1+P） | 8 |
+| D3+D4 | 类别 5 处理 × 骨架权重 | {当背景, 忽略} × {0.5, 1.0}（Full-v4），2×2 一次跑完 | 8 |
 
-再加 Stage 1 共 6 个 run。开发阶段约 26 个 run。所有候选，包括没选上的，都记进 `docs/V4_DEV_LOG.md`。开发阶段不读报告折的任何指标。
-
-冻结配置下 fold 0、1 的 Stage 2 run 和报告阶段的 run 完全相同（同样在 T_k − V_k 上训练、按 V_k 选），报告阶段直接沿用，不重训。
-
-## 6. GPU 和时间
-
-- 队列规则：最多同时 4 个 v4 run；每张卡最多 1 个 v4 run（按会话分别计，可以和 cnv-sota 共用一张卡，主会话 2026-10-22 确认）；只在空闲显存 ≥ 40 GB 的卡上启动；不向任何进程发信号。nnU-Net v2 还有 run 在 SOTA 队列里等着时，v4 启动后该卡仍要留 40 GB。主会话已让 cnv-sota 暂停启动新的非 nnU-Net run。
-- 估算（单 run：Stage 1 约 1.2 小时，Stage 2 约 2.5–3 小时；内部验证只有 18 例，ROI 臂只在 ROI 内滑窗，比 SOTA 的全体积验证快）：
-
-  | 阶段 | run 数 | GPU 小时 | 4 卡墙钟 |
-  |---|---|---|---|
-  | 开发 | 6 个 Stage 1 + 20 个 Stage 2 | 约 65 | 约 1 天（D0–D4 有先后，实际 1.5–2 天） |
-  | 报告 | 9 个 Stage 1 + 约 25 个 Stage 2 | 约 85 | 约 1 天 |
-
-  这是 4 张卡都能用的情况。现在能用的卡都被 cnv-sota 占着，实际时间取决于卡什么时候空出来。
+D3 和 D4 合成一个 2×2，是为了少一轮先后等待。R1+P+V 臂用 D3+D4 选出的类别 5 处理。开发阶段共 20 个 Stage 2 run。
 
 ## 7. 报告阶段
 
-冻结后，协议 §4 的 7 个臂 × 5 折。OOF 存为 `results/v4_<arm>_label_predictions/<case>_stage2_label.nrrd`（int16 gzip，0/1，缓存网格，与 SOTA/P0 同格式），评价只调用 `eval_protocol_metrics.py --pred_binary_Y`，报告折只评一次。臂名：`r0`、`r1`、`r1p`、`r1pv`、`full`、`full_noP`、`full_shufP`。
+冻结后，协议 §4 的臂中 R0 直接用 cnv-sota 的 nnU-Net v2 OOF（若 §3 采用"最后一个 epoch"）；其余 6 个臂（R1、R1+P、R1+P+V、Full-v4、Full-v4 − P、Full-v4 + 打乱先验）各在 T_k 上训练 5 折，共 30 个 run。另需 fold 2–4 的 Stage 1（9 个 run）和先验。OOF 存到 `results/v4_<arm>_label_predictions/`，评价只调用 `eval_protocol_metrics.py --pred_binary_Y`，报告折只评一次。
+
+## 8. GPU 和时间
+
+- 队列规则不变：最多 4 个 v4 run；每卡最多 1 个 v4 run（可与 cnv-sota 共卡）；空闲显存 ≥ 40 GB 才启动；nnU-Net v2 还有对照 run 在等时，启动后该卡仍要留 40 GB；不向任何进程发信号。
+- 单个 Stage 2 run：nnU-Net 300 epoch 约 3.2 小时，加骨架增强和导出，按 3.5–4 小时算。Stage 1（DynUNet）每个约 40 分钟。
+
+| 阶段 | 内容 | GPU 小时 | 4 卡墙钟 |
+|---|---|---|---|
+| 实现 | nnU-Net trainer、数据集转换、单元测试、冒烟 | — | 约 1 天 |
+| 开发 | 3 个 Stage 1（fold 1 剩余）+ 20 个 Stage 2 | 约 75 | 约 1 天（两轮：R0/R1/D2 12 个，再 D3+D4 8 个） |
+| 报告 | 9 个 Stage 1 + 30 个 Stage 2 | 约 115 | 约 1.5 天 |
+
+合计约 3.5–4 天，前提是 4 张卡都有空位。如果 Stage 1 改用 nnU-Net（§9 第 3 条），再加约 50 GPU 小时，约半天到 1 天。
+
+## 9. 需要主会话 / 用户确认
+
+1. **选模型**：建议取最后一个 epoch，报告阶段在 T_k 上重训，R0 直接用 cnv-sota 的 nnU-Net v2 结果（§3）。
+2. **ROI 定义**：建议用方案 B（路标做 ICP 定位，外接框取映过来的训练折 Y 图谱支撑区 + m）。协议原文的方案 A 在真实 Stage 1 下覆盖率只有 80–88%（§0 第 5、6 条）。这会改协议 §4 的 ROI 定义。
+3. **Stage 1 骨干**：建议保持 DynUNet（照原计划，已在跑）。只有在 D2 显示先验 (a)(b) 明显受 Stage 1 质量拖累时，才换成 nnU-Net。
