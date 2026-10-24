@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Build ROI records and prior channels for every case of one outer fold (CPU).
 
-Needs the three Stage-1 inner runs of fold k (results/v4_stage1/fold{k}/inner{j}/COMPLETED).
-Stage-1 input per case: inner-OOF prediction for T_k, mean of the 3 inner models for report fold k.
+Stage-1 input per case, per variant (nested selection, V4_PLAN §5 as revised 2026-10-24):
+  --variant dev     Stage-1 runs under results/v4_stage1/fold{k}_dev (inner folds over T_k - V_k):
+                    inner-OOF prediction for T_k - V_k, mean of the 3 dev inner models for V_k
+                    (V_k is held out of every dev Stage-1 model, exactly like report-fold cases).
+  --variant report  Stage-1 runs under results/v4_stage1/fold{k} (inner folds over T_k):
+                    inner-OOF prediction for T_k, mean of the 3 inner models for report fold k.
 
 The atlas and its ICP template come only from the current training set (main session, 2026-10-23):
-  --variant dev     atlas set = T_k - V_k   (development: Stage 2 trains on T_k - V_k, scored on V_k)
-  --variant report  atlas set = T_k         (report phase: Stage 2 trains on T_k, scored on fold k)
+  dev     atlas set = T_k - V_k   (selection: Stage 2 trains on T_k - V_k, scored on V_k)
+  report  atlas set = T_k         (report phase: Stage 2 trains on T_k, scored on fold k)
 Atlas-set cases get the leave-one-out atlas. The ROI is the atlas support (> 0.02) mapped into the
 case by ICP on its predicted class-4 points, per side, + m mm (protocol §4 as revised 2026-10-23);
 the landmark boxes are kept in the record for reference.
@@ -35,19 +39,22 @@ from trainer.v4.splits import N_INNER, all_cases, internal_split, stage1_source,
 
 ATLAS = None
 FOLD = None
+VARIANT = None
 ATLAS_SET = None
 S1_ROOT = None
 OUT = None
 
 
 def load_s1(case_id):
-    src, j = stage1_source(FOLD, case_id)
+    tier = "dev" if VARIANT == "dev" else "report"
+    src, j = stage1_source(FOLD, case_id, tier=tier)
     if src == "inner":
         d = np.load(S1_ROOT / "pred" / f"{case_id}_s1prob.npz")
         return d["p1"] / np.float32(255), d["p4"] / np.float32(255), f"inner{j}"
+    holdout_dir = "val_pred" if tier == "dev" else "report_pred"
     p1 = p4 = None
     for jj in range(N_INNER):
-        d = np.load(S1_ROOT / f"inner{jj}" / "report_pred" / f"{case_id}_s1prob.npz")
+        d = np.load(S1_ROOT / f"inner{jj}" / holdout_dir / f"{case_id}_s1prob.npz")
         a, b = d["p1"].astype(np.float32), d["p4"].astype(np.float32)
         p1, p4 = (a, b) if p1 is None else (p1 + a, p4 + b)
     return p1 / (255.0 * N_INNER), p4 / (255.0 * N_INNER), "ensemble"
@@ -83,22 +90,24 @@ def prior_one(case_id):
 
 
 def main():
-    global ATLAS, FOLD, ATLAS_SET, S1_ROOT, OUT
+    global ATLAS, FOLD, VARIANT, ATLAS_SET, S1_ROOT, OUT
     ap = argparse.ArgumentParser()
     ap.add_argument("--fold", type=int, required=True)
     ap.add_argument("--variant", choices=["dev", "report"], required=True)
     ap.add_argument("--workers", type=int, default=24)
-    ap.add_argument("--cases", default="", help="comma-separated subset (debugging); default all 154")
-    ap.add_argument("--stage1_root", default="", help="override results/v4_stage1/fold{k} (smoke tests)")
+    ap.add_argument("--cases", default="",
+                    help="comma-separated subset (debugging); default: T_k for dev, all 154 for report")
+    ap.add_argument("--stage1_root", default="", help="override Stage-1 dir (smoke tests)")
     args = ap.parse_args()
-    FOLD = args.fold
-    ATLAS_SET = set(internal_split(FOLD)[0] if args.variant == "dev" else train_cases(FOLD))
-    S1_ROOT = Path(args.stage1_root) if args.stage1_root else STAGE1_DIR / f"fold{FOLD}"
+    FOLD, VARIANT = args.fold, args.variant
+    ATLAS_SET = set(internal_split(FOLD)[0] if VARIANT == "dev" else train_cases(FOLD))
+    s1_subdir = f"fold{FOLD}" if VARIANT == "report" else f"fold{FOLD}_dev"
+    S1_ROOT = Path(args.stage1_root) if args.stage1_root else STAGE1_DIR / s1_subdir
     if not args.stage1_root:
         missing = [j for j in range(N_INNER) if not (S1_ROOT / f"inner{j}" / "COMPLETED").exists()]
         if missing:
-            raise SystemExit(f"Stage-1 inner runs not finished for fold {FOLD}: {missing}")
-    OUT = out = PRIORS_DIR / f"fold{FOLD}_{args.variant}"
+            raise SystemExit(f"Stage-1 inner runs not finished for fold {FOLD} ({s1_subdir}): {missing}")
+    OUT = out = PRIORS_DIR / f"fold{FOLD}_{VARIANT}"
     out.mkdir(parents=True, exist_ok=True)
     ctx = mp.get_context("fork")
     t0 = time.time()
@@ -113,12 +122,16 @@ def main():
             ATLAS.add_warped(cid, ws)
     print(f"atlas: template {template}, {ATLAS.n} cases ({(time.time() - t0) / 60:.1f} min)", flush=True)
 
-    cases = args.cases.split(",") if args.cases else all_cases()
+    # dev covers T_k only (T_k - V_k inner-OOF + V_k ensemble); the report fold k has no
+    # dev-tier Stage-1 predictions and is not part of the dev dataset (V4_PLAN §5-§6).
+    default_cases = train_cases(FOLD) if VARIANT == "dev" else all_cases()
+    cases = args.cases.split(",") if args.cases else default_cases
     with ctx.Pool(args.workers) as p:
         res = p.map(prior_one, cases)
     no_roi = [c for c, found, _, _ in res if not found]
     mirrored = [c for c, _, src, _ in res if "mirror" in src]
-    meta = {"fold": FOLD, "variant": args.variant, "template": template, "n_atlas": ATLAS.n, "n_cases": len(res),
+    meta = {"fold": FOLD, "variant": VARIANT, "stage1_dir": s1_subdir, "template": template,
+            "n_atlas": ATLAS.n, "n_cases": len(res),
             "no_roi": no_roi, "mirrored_side": mirrored, "atlas_boxes": ATLAS.boxes,
             "minutes": (time.time() - t0) / 60}
     (out / "atlas_meta.json").write_text(json.dumps(meta, indent=1))

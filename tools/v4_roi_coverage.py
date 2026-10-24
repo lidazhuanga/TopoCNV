@@ -29,8 +29,12 @@ def main():
     ap.add_argument("--variant", choices=["dev", "report"], default="dev",
                     help="prior/ROI build: dev (atlas from T_k - V_k) or report (atlas from T_k)")
     args = ap.parse_args()
-    if args.set == "report" and not (REPO / "configs" / "v4_frozen.yaml").exists():
-        raise SystemExit("report-fold coverage only after configs/v4_frozen.yaml is committed")
+    if args.set == "report":
+        fz = REPO / "configs" / "v4_frozen"
+        missing = [k for k in range(5) if not (fz / f"fold{k}.json").exists()]
+        if missing:
+            raise SystemExit(f"report-fold coverage only after all 5 configs/v4_frozen/fold*.json "
+                             f"exist; missing {missing}")
     rows = []
     for k in [int(x) for x in args.folds.split(",")]:
         tr, iv = internal_split(k)

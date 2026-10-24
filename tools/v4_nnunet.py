@@ -111,6 +111,12 @@ def install(_):
         link.unlink()
     link.symlink_to(ROOT / "trainer" / "v4" / "nnunet" / "nnUNetTrainerV4.py")
     print(f"installed {link} -> {link.resolve()}")
+    import shutil
+    dst300 = dst / "nnUNetTrainer_300epochs.py"
+    if dst300.exists() or (dst300.is_symlink() and dst300.is_file()):
+        dst300.unlink()
+    shutil.copy(ROOT / "tools" / "nnUNetTrainer_300epochs.py", dst300)
+    print(f"installed {dst300} (copy)")
 
 
 def prep(args):
@@ -122,7 +128,8 @@ def prep(args):
     pdir = PRIORS_DIR / f"fold{k}_{variant}"
     meta = {"fold": k, "variant": variant, "margin_mm": args.margin, "shuffle": args.shuffle,
             "priors_dir": str(pdir), "created": datetime.now().isoformat(), "cases": {}}
-    for i, c in enumerate(all_cases()):
+    cases = train_cases(k) if variant == "dev" else all_cases()   # dev: T_k only (V4_PLAN §6)
+    for i, c in enumerate(cases):
         rec = json.loads((pdir / f"{c}_roi.json").read_text())
         shape = tuple(rec["shape"])
         boxes = [sd["boxes"][str(args.margin)] for sd in rec["sides"] if sd["boxes"][str(args.margin)] is not None]
@@ -140,14 +147,15 @@ def prep(args):
         for ch in range(3):
             write_nifti(pr[ch].astype(np.float32) / 255.0, raw / "imagesTr" / f"{c}_{ch + 1:04d}.nii.gz", np.float32)
         write_nifti(np.asarray(lab[sl], np.uint8), raw / "labelsTr" / f"{c}.nii.gz", np.uint8)
-        print(f"[{i + 1}/154] {c} crop {[b - a for a, b in crop]}", flush=True)
+        print(f"[{i + 1}/{len(cases)}] {c} crop {[b - a for a, b in crop]}", flush=True)
     (raw / "v4_meta.json").write_text(json.dumps(meta))
     (raw / "dataset.json").write_text(json.dumps({
         "channel_names": {"0": "nonorm", "1": "nonorm", "2": "nonorm", "3": "nonorm"},
         "labels": {"background": 0, "c1": 1, "c2": 2, "c3": 3, "c4": 4, "c5": 5},
-        "numTraining": 154, "file_ending": ".nii.gz", "overwrite_image_reader_writer": "NibabelIO",
+        "numTraining": len(cases), "file_ending": ".nii.gz", "overwrite_image_reader_writer": "NibabelIO",
         "description": f"CN V v4 fold {k} ({variant}{', shuffled priors' if args.shuffle else ''}): ROI-cropped "
-                       f"cache CT + priors a/b/c, original labels 0..5, margin {args.margin} mm"}, indent=2))
+                       f"cache CT + priors a/b/c, original labels 0..5, margin {args.margin} mm, "
+                       f"{len(cases)} cases"}, indent=2))
     pre = NNUNET_HOME / "nnUNet_preprocessed" / name
     pre.mkdir(parents=True, exist_ok=True)
     src = NNUNET_HOME / "nnUNet_preprocessed" / SRC_DATASET / f"{PLANS}.json"
@@ -158,8 +166,7 @@ def prep(args):
     (pre / "splits_final.json").write_text(json.dumps(splits_for(k, variant), indent=1))
     done = ROOT / "log" / "v4" / f"nnprep_{dataset_id(k, variant, args.shuffle)}.done"
     done.parent.mkdir(parents=True, exist_ok=True)
-    done.write_text(f"{datetime.now().isoformat()} {name} margin {args.margin}
-")
+    done.write_text(f"{datetime.now().isoformat()} {name} margin {args.margin}\n")
     print(f"prepared {name}")
 
 
@@ -186,9 +193,27 @@ def results_dir(did, dname, trainer, split):
     return NNUNET_HOME / "nnUNet_results" / dname / f"{trainer}__{PLANS}__{CONFIG}" / f"fold_{split}"
 
 
+def gate_report(args):
+    """Report training must follow the per-fold frozen selection (V4_PLAN §7): all 5 frozen files
+    exist, and the requested trainer/margin match fold k's chosen_config."""
+    fz = ROOT / "configs" / "v4_frozen"
+    missing = [k for k in range(5) if not (fz / f"fold{k}.json").exists()]
+    if missing:
+        raise SystemExit(f"report phase needs all 5 frozen configs (configs/v4_frozen/fold*.json); "
+                         f"missing folds {missing}")
+    cfg = json.loads((fz / f"fold{args.fold}.json").read_text()).get("chosen_config", {})
+    if "margin" in cfg and int(cfg["margin"]) != int(args.margin):
+        raise SystemExit(f"fold {args.fold}: --margin {args.margin} != frozen margin {cfg['margin']}")
+    trainers = cfg.get("trainers") or ([cfg["trainer"]] if "trainer" in cfg else [])
+    if trainers and args.trainer not in trainers:
+        raise SystemExit(f"fold {args.fold}: trainer {args.trainer!r} not among frozen {trainers}")
+
+
 def train(args):
-    if args.variant == "report" and not (ROOT / "configs" / "v4_frozen.yaml").exists():
-        raise SystemExit("report-phase training only after configs/v4_frozen.yaml is committed (protocol §5)")
+    if args.variant == "report":
+        gate_report(args)
+    if args.r0 and args.fold not in (0, 1):
+        raise SystemExit("--r0 (Dataset519) has dev splits for folds 0 and 1 only")
     if args.r0:
         did, dname, trainer, split = R0DEV[0], R0DEV[1], "nnUNetTrainer_300epochs", args.fold
         assert args.variant == "dev"

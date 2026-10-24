@@ -64,3 +64,14 @@ nohup python tools/p0_queue.py >> log/p0_binary_y_20261020/queue.log 2>&1 &
 - A2 的打乱方式：训练时在 patch 内做 `spatial_roll`，验证和推理时在整个体积上做。两者都破坏了空间对齐，
   但不完全相同，写 Methods 时需要说明。
 - 补上 B0 的 `--stage1_pred_dir`（此前 B0 因找不到 Stage-1 目录而无法启动）。
+
+## 2026-10-24 终止：methods §17.1 的七臂 fold0 重跑（v4 路线取代）
+
+2026-10-24 11:10 按 methods §17.1 重跑的 P0 fold0 七臂确认放弃：协议 v0.4-draft 明确
+"P0 结果作为历史记录保留，不进新稿的主表"，GPU 优先级也在 v4 之后；P0 5/5 主表早已完成。
+full/b0（500 epoch，fold0）已跑完的结果只覆盖部分臂、无下游用途，目录内已放
+ABANDONED_2026-10-24.md 标记（results/ 下 *_p0_full_protocol_v03_20261020* 与
+*_p0_b0_protocol_v03_20261020* 四个目录及 log/p0_protocol_v03_20261020/）；a_mem/a_gate/c1/a2
+四臂取消，不再排队。同日 nnunet 臂的坏结果（启动丢 flag 导致）已按原版配方重跑修复
+（fold0 Dice_Y 0.6475 / HD95 12.79，sota_binary_y_nnunet/fold0 与 10-22 的 5/5 序列恢复一致）。
+上述 §17.1 出处为 Mac 侧 methods 文档，服务器与本地仓库均无该节。

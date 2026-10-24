@@ -47,3 +47,12 @@
 ## D4 骨架损失权重
 
 ## 冻结
+
+| 2026-10-24 | kimi k3.1-pro 只读审查 V4_PLAN（报告：~/cnv/v4_kimi_review_final_20261024.md） | 3 个 P0（同一套五折既调参又报告；开发期 Stage 1 未嵌套且 V_k 推理口径与报告不一致；nnU-Net 路径无真实冒烟）+ 6 个 P1。用户决定采用 nested CV 补救 |
+| 2026-10-24 | nested CV 落地（V4_PLAN §5–§9 修订） | splits.py 加 tier（开发层内层折只分 T_k−V_k）；train_stage1.py 加 --tier（dev 层预测 V_k 到 val_pred/）；build_priors.py dev 变体改读 fold{k}_dev（V_k 三模型平均）；新增 tools/v4_select_config.py（每折选择 + 完整性硬校验 + configs/v4_frozen/fold{k}.json）；train --variant report 按折门控。tests：+4（test_v4_splits_devtier），20+6 全过。修复 tools/v4_nnunet.py 一处 f-string 语法错误（prep 曾因此从未运行） |
+| 2026-10-24 | 旧开发产物作废标记 | 2026-10-23 构建的 fold0/fold1 _dev 先验基于报告层 Stage 1（含 V_k），按新设计作废待重建；r0dev fold0/f1 结果（V_0 Dice 0.634、V_1 Dice 0.674）仍有效（R0 无级联不依赖 Stage 1），作为各折参照 |
+| 2026-10-24 | 用户决策落地 | (1) D1 m 规则改下尾：训练病例最低覆盖率 ≥99%；报告折只描述。(2) 空预测 HD95 = 病例物理对角线惩罚计入汇总，逐例 Empty_pred_Y + 空预测率（metrics_protocol._hd95 / score_protocol、eval_protocol_metrics 已改）。(3) 统计预注册：主比较 Full-v4 vs R0 配对 ΔDice/ΔHD95 + bootstrap CI，其余 Holm；不做重复 seed。(4) 强度增强只作用 CT 通道 0（nnUNetTrainerV4.Channel0Only，含 Gamma 反转在内的 7 类 stock 强度变换被包装）。(5) 冒烟按一般要求，不做吞吐实测 |
+| 2026-10-24 | sota_binary_y_nnunet fold0 修复重跑完成 | 原版配方（300ep + sliding-window 选模 + crop0.33）：fold0 Dice_Y 0.6475 / HD95 12.79mm（n=31），与 10-22 原版 0.6423/12.64 一致；10-24 上午因丢 flag 产生的垃圾结果及覆盖事故已恢复 |
+| 2026-10-24 | 主干曝光的处理方向（用户问询后确认不重跑） | 重跑同批 154 例无法消除“设计用过全量五折”的信息曝光；方向定为锁定确认集：2026-10-24 新到的 126 例（120 例 CT 未标注已隔离 + MR）标注到位后作锁定测试集，默认不并入训练（V4_PLAN §7.1） |
+| 2026-10-24 | P0 §17.1 七臂 fold0 重跑确认放弃 | 协议 v0.4：P0 仅作历史记录不进新稿主表、GPU 优先级低于 v4；P0 5/5 表已完整。已完成 3 臂中 full/b0（500ep，fold0，4/7 臂缺失）标记 ABANDONED，a_mem/a_gate/c1/a2 取消不排队；nnunet 臂坏结果已修复（fold0 0.6475/12.79 与 10-22 序列一致）。详见 docs/P0_RUNBOOK.md |
+| 2026-10-24 | 复审（qoder DeepSeek-Flash，~/cnv/qoder_review_20261024.log）修复 | P0-1 Channel0Only 首版键/轴错误（生产键是 image、无 batch 维、通道轴 0）→ 生产中为空操作，已按生产约定重写并加真实管线集成测试；P0-2 dev 先验/prep 病例集合改为 T_k（原 154 会在报告折病例上崩溃）；P1 报告阶段门控改为实际校验 chosen_config 的 margin/trainers、移除旧 yaml 旁路；sota/p0 汇总 REQUIRED 加 Empty_pred_Y（旧 CSV 自动触发重评）；Empty_pred_Y 仅在 GT 非空时计 1。受影响需作废的 Stage-2 run：无（v4 候选尚未开跑；r0dev 用 stock trainer 不受 DA 改动影响） |

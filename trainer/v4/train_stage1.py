@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """v4 Stage 1: bony-landmark segmentation (background / class 1 / class 4), nested in outer fold k.
 
-Inner model j of outer fold k trains on T_k minus inner fold j, for a fixed number of epochs; the last
-checkpoint is used (no selection, so no further validation split is needed). It then predicts
-  - inner fold j (its inner-OOF cases)  -> results/v4_stage1/fold{k}/pred/{case}_s1prob.npz
-  - report fold k                        -> results/v4_stage1/fold{k}/inner{j}/report_pred/{case}_s1prob.npz
-tools/v4_build_priors.py averages the three inner models' report-fold predictions.
+Two tiers (V4_PLAN §5 as revised 2026-10-24):
 
-  CUDA_VISIBLE_DEVICES=4 python -m trainer.v4.train_stage1 --fold 0 --inner 0
+  --tier report  inner folds over T_k. Inner model j trains on T_k minus inner fold j, then predicts
+                 its inner-OOF cases (results/v4_stage1/fold{k}/pred) and report fold k
+                 (results/v4_stage1/fold{k}/inner{j}/report_pred). No selection happens at this tier,
+                 so V_k being ordinary training data is fine.
+  --tier dev     inner folds over T_k - V_k only. Inner model j trains on (T_k - V_k) minus inner
+                 fold j, then predicts its inner-OOF cases (results/v4_stage1/fold{k}_dev/pred) and
+                 V_k (results/v4_stage1/fold{k}_dev/inner{j}/val_pred). V_k is held out of every dev
+                 Stage-1 model; tools/v4_build_priors.py --variant dev averages the three val_pred
+                 sets, so V_k gets the same 3-model-ensemble inference as report-fold cases.
+
+Last checkpoint is used (no selection, so no further validation split is needed).
+
+  CUDA_VISIBLE_DEVICES=4 python -m trainer.v4.train_stage1 --fold 0 --inner 0 --tier dev
 """
 import argparse
 import json
@@ -24,7 +32,7 @@ from .engine import make_optim, save_ckpt, seed_everything, train_epoch
 from .infer import predict_stage1
 from .losses import MaskedWeightedBCEDice
 from .model import build_dynunet
-from .splits import inner_folds, report_cases, stage1_train_cases
+from .splits import inner_folds, internal_split, report_cases, stage1_train_cases
 
 PATCH = (128, 128, 128)
 
@@ -33,6 +41,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fold", type=int, required=True)
     ap.add_argument("--inner", type=int, required=True)
+    ap.add_argument("--tier", choices=["report", "dev"], default="report")
     ap.add_argument("--epochs", type=int, default=150)
     ap.add_argument("--lr", type=float, default=5e-4)
     ap.add_argument("--batch_size", type=int, default=2)
@@ -41,26 +50,30 @@ def main():
     ap.add_argument("--num_workers", type=int, default=4)
     ap.add_argument("--ckpt_every", type=int, default=25)
     ap.add_argument("--smoke", type=int, default=0, help="N>0: N training cases, 2 prediction cases, scratch dir")
-    ap.add_argument("--smoke_cases", default="", help="smoke: predict these cases of inner fold j (comma list)")
+    ap.add_argument("--smoke_cases", default="", help="smoke: predict these holdout cases (comma list)")
     ap.add_argument("--resume", action="store_true")
     args = ap.parse_args()
 
     k, j = args.fold, args.inner
-    out = STAGE1_DIR / (f"smoke/fold{k}" if args.smoke else f"fold{k}")
+    subdir = f"fold{k}" if args.tier == "report" else f"fold{k}_dev"
+    out = STAGE1_DIR / (f"smoke/{subdir}" if args.smoke else subdir)
     run = out / f"inner{j}"
-    (run / "report_pred").mkdir(parents=True, exist_ok=True)
+    holdout_dir = "report_pred" if args.tier == "report" else "val_pred"
+    (run / holdout_dir).mkdir(parents=True, exist_ok=True)
     (out / "pred").mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    seed_everything(1000 * k + j)
+    seed_everything(1000 * k + j + (5000 if args.tier == "dev" else 0))
 
-    train_ids = stage1_train_cases(k, j)
-    pred_inner = inner_folds(k)[j]
-    pred_report = report_cases(k)
+    train_ids = stage1_train_cases(k, j, tier=args.tier)
+    pred_inner = inner_folds(k, tier=args.tier)[j]
+    pred_holdout = report_cases(k) if args.tier == "report" else internal_split(k)[1]
     if args.smoke:
         want = set(args.smoke_cases.split(",")) if args.smoke_cases else set(pred_inner[:1])
-        train_ids, pred_inner, pred_report = train_ids[:args.smoke], [c for c in pred_inner if c in want], pred_report[:1]
+        train_ids, pred_inner = train_ids[:args.smoke], [c for c in pred_inner if c in want]
+        pred_holdout = pred_holdout[:1]
     cfg = vars(args) | {"patch": list(PATCH), "train_cases": train_ids, "inner_pred_cases": pred_inner,
-                        "report_pred_cases": pred_report, "classes": ["bg", "class1", "class4"]}
+                        "holdout_pred_cases": pred_holdout, "holdout_dir": holdout_dir,
+                        "classes": ["bg", "class1", "class4"]}
     (run / "config.json").write_text(json.dumps(cfg, indent=1))
 
     ds = V4PatchDataset(train_ids, PATCH, stage=1, random_crop_prob=args.random_crop_prob)
@@ -104,11 +117,11 @@ def main():
 
     model.eval()
     t0 = time.time()
-    for case, dest in [(c, out / "pred") for c in pred_inner] + [(c, run / "report_pred") for c in pred_report]:
+    for case, dest in [(c, out / "pred") for c in pred_inner] + [(c, run / holdout_dir) for c in pred_holdout]:
         p1, p4 = predict_stage1(model, case, PATCH, args.step_size, device)
-        np.savez_compressed(dest / f"{case}_s1prob.npz", p1=p1, p4=p4, source=f"fold{k}_inner{j}")
-    print(f"predicted {len(pred_inner)} inner-OOF + {len(pred_report)} report cases "
-          f"in {(time.time() - t0) / 60:.1f} min", flush=True)
+        np.savez_compressed(dest / f"{case}_s1prob.npz", p1=p1, p4=p4, source=f"fold{k}_tier{args.tier}_inner{j}")
+    print(f"predicted {len(pred_inner)} inner-OOF + {len(pred_holdout)} holdout "
+          f"({holdout_dir}) cases in {(time.time() - t0) / 60:.1f} min", flush=True)
     (run / "COMPLETED").write_text(f"{datetime.now().isoformat()}\n")
 
 
