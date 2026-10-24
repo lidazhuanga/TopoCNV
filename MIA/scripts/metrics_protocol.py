@@ -262,11 +262,17 @@ def _precision(pred: np.ndarray, gt: np.ndarray) -> float:
 
 
 def _hd95(pred: np.ndarray, gt: np.ndarray, spacing_zyx: Sequence[float]) -> float:
-    """95th-percentile Hausdorff distance (mm). NaN if either empty."""
+    """95th-percentile Hausdorff distance (mm).
+
+    Empty prediction with non-empty GT is a failure, not a missing value: it scores the case's
+    physical diagonal (user decision 2026-10-24), so a nanmean summary can never silently drop
+    the worst cases. NaN only when the GT itself is empty."""
     pred = np.asarray(pred, dtype=bool)
     gt = np.asarray(gt, dtype=bool)
-    if not pred.any() or not gt.any():
+    if not gt.any():
         return float("nan")
+    if not pred.any():
+        return float(np.sqrt(sum((n * float(s)) ** 2 for n, s in zip(gt.shape, spacing_zyx))))
     try:
         from scipy.ndimage import distance_transform_edt, binary_erosion
     except ImportError:
@@ -425,6 +431,7 @@ def score_protocol(
     gY = mask_Y(gt)
     out: Dict[str, float] = {"Dice_Y": _dice(pY, gY)}
     out["HD95_Y"] = _hd95(pY, gY, spacing_zyx)
+    out["Empty_pred_Y"] = float((not pY.any()) and bool(gY.any()))
     out["ASSD_Y"] = _assd(pY, gY, spacing_zyx)
     if secondary_pred is not None:
         sp = np.asarray(secondary_pred)

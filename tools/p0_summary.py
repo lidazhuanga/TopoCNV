@@ -43,7 +43,7 @@ V04_COLS = ["SurfDice_Y", "Recall_vis", "Dice_vis", "Lvis_over_Y",
             "Dice_tier1", "Dice_tier2", "Dice_tier3", "Dice_tier4"]
 V04_P_COLS = ["SurfDice_Y", "Dice_vis"]
 # Columns a CSV must have to count as current; older CSVs are re-scored.
-REQUIRED = set(COLS) | set(V04_COLS) | {"Dice_123_s1full", "Dice_c4_s1full"}
+REQUIRED = set(COLS) | set(V04_COLS) | {"Dice_123_s1full", "Dice_c4_s1full", "Empty_pred_Y"}
 
 
 def pred_dir(arm):

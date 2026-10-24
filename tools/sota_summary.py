@@ -36,7 +36,7 @@ COLS = ["Dice_Y", "HD95_Y", "SurfDice_Y", "Dice_L", "Precision_L", "Recall_L", "
         "Recall_vis", "Dice_vis", "Dice_123", "Dice_c4"]
 P_COLS = ["Dice_Y", "HD95_Y", "SurfDice_Y", "Dice_L", "Dice_vis"]
 # Columns a CSV must have to count as current; CSVs from an older eval version are re-scored.
-REQUIRED = set(COLS) | {"Lvis_over_Y"}
+REQUIRED = set(COLS) | {"Lvis_over_Y", "Empty_pred_Y"}   # Empty_pred_Y: HD95 v2 (2026-10-24)
 
 
 def pred_dir(method):

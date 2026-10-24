@@ -228,7 +228,7 @@ def main():
         return
 
     keys = ["Dice_Y", "HD95_Y", "ASSD_Y", "Dice_123", "Dice_c4", "Dice_L", "Precision_L",
-            "Recall_L", "L_over_Y", "Dice_L_legacy", "Dice_H", "Dice_123_s1full", "Dice_c4_s1full"] + list(V04_KEYS)
+            "Recall_L", "L_over_Y", "Dice_L_legacy", "Dice_H", "Dice_123_s1full", "Dice_c4_s1full"] + list(V04_KEYS) + ["Empty_pred_Y"]
     means = {k: float(np.nanmean([r[k] for r in rows])) for k in keys}
     sources = sorted({str(r.get("Secondary_source", "")) for r in rows})
     print("\n=== mean over", len(rows), "cases ===")
@@ -238,6 +238,8 @@ def main():
         else:
             print(f"  {k}: {v:.4f}")
     print(f"  Secondary_source: {','.join(sources) if sources else '?'}")
+    n_empty = int(sum(bool(r.get("Empty_pred_Y", 0.0)) for r in rows))
+    print(f"  empty_pred_Y: {n_empty}/{len(rows)} (HD95_Y of these = case-diagonal penalty)")
 
     if args.csv:
         out = Path(args.csv)
