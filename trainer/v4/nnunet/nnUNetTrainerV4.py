@@ -37,6 +37,39 @@ Y_CLASSES = (1, 2, 3, 4)
 PRIOR_CHANNELS = {"a": 1, "b": 2, "c": 3}
 VIS_WEIGHT = 0.5
 
+# Stock nnU-Net intensity transforms would corrupt the prior channels (probability / atlas-support
+# maps): Gamma with p_invert_image=1 even flips them, so training would never see the clean priors
+# that inference gets. Spatial transforms stay shared by all channels so CT, priors and labels
+# remain aligned. User decision 2026-10-24: intensity DA acts on the CT channel only.
+# Names as instantiated by nnUNetTrainer.get_training_transforms (batchgeneratorsv2 0.3.6);
+# pinned by tests/test_v4_nnunet.py::test_intensity_list_covers_installed_pipeline.
+INTENSITY_DA = ("GammaTransform", "MultiplicativeBrightnessTransform", "ContrastTransform",
+                "GaussianBlurTransform", "SimulateLowResolutionTransform", "GaussianNoiseTransform")
+
+
+class Channel0Only:
+    """Wrap a stock intensity transform so it only sees channel 0 (CT); channels 1..3 pass through.
+
+    batchgeneratorsv2 calls each transform per sample as transforms(**{'image': t[C, X, Y, Z],
+    'segmentation': s}) — no batch axis, channel axis 0 (nnUNetDataLoader3D.generate_train_batch)."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    def __call__(self, **data_dict):
+        img = data_dict.get("image")
+        if img is None or img.shape[0] < 2:
+            return self.inner(**data_dict)
+        np_in = not isinstance(img, torch.Tensor)
+        data_dict["image"] = img[:1]
+        data_dict = self.inner(**data_dict)
+        out = data_dict["image"]
+        if np_in:
+            data_dict["image"] = np.concatenate([out[:1], img[1:]], axis=0)
+        else:
+            data_dict["image"] = torch.cat([out[:1], img[1:].to(out.dtype)], dim=0)
+        return data_dict
+
 
 # ---------------- data ----------------
 
@@ -142,6 +175,22 @@ class nnUNetTrainerV4(nnUNetTrainer):
     SKEL_W = 0.0
     N_OUT = 2
 
+    @staticmethod
+    def wrap_intensity_ct_only(tr_t):
+        """Intensity DA sees channel 0 (CT) only; priors keep their clean values.
+        batchgeneratorsv2 hides most augs inside RandomTransform (probability wrapper),
+        so both the top level and the wrapped transform are matched by class name."""
+        out = []
+        for t in tr_t.transforms:
+            name = type(t).__name__
+            if name == "RandomTransform" and type(getattr(t, "transform", None)).__name__ in INTENSITY_DA:
+                t.transform = Channel0Only(t.transform)
+            elif name in INTENSITY_DA:
+                t = Channel0Only(t)
+            out.append(t)
+        tr_t.transforms = out
+        return tr_t
+
     def __init__(self, plans, configuration, fold, dataset_json, unpack_dataset=True,
                  device=torch.device("cuda")):
         super().__init__(plans, configuration, fold, dataset_json, unpack_dataset, device)
@@ -178,6 +227,7 @@ class nnUNetTrainerV4(nnUNetTrainer):
             patch_size, rot, ds_scales, mirror_axes, dummy2d,
             use_mask_for_norm=self.configuration_manager.use_mask_for_norm, is_cascaded=False,
             foreground_labels=self.label_manager.foreground_labels, regions=None, ignore_label=None)
+        self.wrap_intensity_ct_only(tr_t)
         if self.SKEL_W > 0:
             ts = tr_t.transforms
             i = len(ts) - 1 if ds_scales is not None else len(ts)  # before DownsampleSegForDSTransform

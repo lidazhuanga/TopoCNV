@@ -95,5 +95,92 @@ class TestV4nnUNet(unittest.TestCase):
         self.assertEqual(T.nnUNetTrainerV4_noP_Vbg_S10.PRIORS, ())
 
 
+class TestChannel0Only(unittest.TestCase):
+    """Production convention (nnUNetDataLoader3D.generate_train_batch): transforms are called
+    per sample as f(**{'image': t[C, X, Y, Z], 'segmentation': s}) — channel axis 0, no batch axis."""
+
+    class Triple:
+        def __call__(self, **d):
+            d["image"] = d["image"] * 3.0
+            return d
+
+    def test_torch_only_channel0_changed(self):
+        img = torch.ones(4, 2, 2, 2)
+        seg = torch.zeros(1, 2, 2, 2, dtype=torch.int16)
+        d = T.Channel0Only(self.Triple())(image=img, segmentation=seg)
+        self.assertTrue(torch.equal(d["image"][0], torch.full((2, 2, 2), 3.0)))
+        self.assertTrue(torch.equal(d["image"][1:], torch.ones(3, 2, 2, 2)))
+        self.assertTrue(torch.equal(d["segmentation"], seg))
+
+    def test_numpy_only_channel0_changed(self):
+        img = np.ones((4, 2, 2, 2), np.float32)
+        d = T.Channel0Only(self.Triple())(image=img)
+        self.assertAlmostEqual(float(d["image"][0].mean()), 3.0)
+        self.assertAlmostEqual(float(d["image"][1:].mean()), 1.0)
+        self.assertEqual(d["image"].shape, img.shape)
+
+    def test_single_channel_passthrough(self):
+        img = np.ones((1, 2, 2, 2), np.float32)
+        d = T.Channel0Only(self.Triple())(image=img)
+        self.assertEqual(d["image"].shape, img.shape)
+        self.assertAlmostEqual(float(d["image"].mean()), 3.0)
+
+    def test_intensity_list_covers_installed_pipeline(self):
+        """INTENSITY_DA must name every stock intensity transform of the INSTALLED nnU-Net v2
+        (a typo here silently leaves a transform unwrapped -> priors corrupted)."""
+        from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
+        tr_t = nnUNetTrainer.get_training_transforms(
+            (32, 32, 32), (0.0, 1.0), [(1, 1, 1)], (0, 1, 2), False,
+            [False] * 4, False, [1], None, None)
+        names = set()
+        for x in tr_t.transforms:
+            names.add(type(x).__name__)
+            inner = getattr(x, "transform", None)
+            if inner is not None:
+                names.add(type(inner).__name__)
+        stock = {"GaussianNoiseTransform", "GaussianBlurTransform", "MultiplicativeBrightnessTransform",
+                 "ContrastTransform", "SimulateLowResolutionTransform", "GammaTransform"}
+        self.assertTrue(stock <= names, f"installed pipeline lost transforms: {stock - names}")
+        self.assertTrue(stock <= set(T.INTENSITY_DA), f"INTENSITY_DA misses: {stock - set(T.INTENSITY_DA)}")
+        wrapped = T.nnUNetTrainerV4.wrap_intensity_ct_only(tr_t)
+        inner = set()
+        for x in wrapped.transforms:
+            if isinstance(x, T.Channel0Only):
+                inner.add(type(x.inner).__name__)
+            elif type(x).__name__ == "RandomTransform" and isinstance(getattr(x, "transform", None), T.Channel0Only):
+                inner.add(type(x.transform.inner).__name__)
+        self.assertTrue(stock <= inner, f"wrap missed: {stock - inner}")
+        others = {type(x).__name__ for x in wrapped.transforms} - {"RandomTransform"}
+        self.assertIn("SpatialTransform", others)          # spatial DA untouched
+        self.assertIn("MirrorTransform", others)
+
+    def test_real_intensity_chain_leaves_priors_identical(self):
+        """End-to-end over the real stock pipeline (spatial/mirror removed, probabilities forced
+        to 1): channels 1..3 must come back byte-identical, channel 0 must be augmented."""
+        from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
+        tr_t = nnUNetTrainer.get_training_transforms(
+            (32, 32, 32), (0.0, 1.0), None, (0, 1, 2), False, [False] * 4, False, [1], None, None)
+        T.nnUNetTrainerV4.wrap_intensity_ct_only(tr_t)
+        keep = []
+        for x in tr_t.transforms:
+            name = type(x).__name__
+            if name in ("SpatialTransform", "MirrorTransform", "RemoveLabelTransform",
+                        "DownsampleSegForDSTransform", "NumpyToTensor"):
+                continue
+            if name == "RandomTransform":
+                x.apply_probability = 1.0
+                keep.append(x)
+        self.assertGreaterEqual(len(keep), 4, "expected several wrapped intensity transforms")
+        torch.manual_seed(0)
+        img = torch.rand(4, 32, 32, 32)
+        seg = torch.zeros((1, 32, 32, 32), dtype=torch.int16)
+        d = {"image": img.clone(), "segmentation": seg.clone()}
+        for x in keep:
+            d = x(**d)
+        self.assertTrue(torch.equal(d["image"][1:], img[1:]), "prior channels must pass through")
+        self.assertFalse(torch.equal(d["image"][0], img[0]), "CT channel must be augmented")
+        self.assertTrue(torch.equal(d["segmentation"], seg))
+
+
 if __name__ == "__main__":
     unittest.main()
