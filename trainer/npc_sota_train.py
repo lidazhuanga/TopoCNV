@@ -11,15 +11,22 @@ FORBIDDEN Primary: 5-class mean Dice / soft-tree mean.
 
 Models: nnunet | segresnet | attention_unet | unetr | swin_unetr | nnformer
 
-Usage:
-  cd trainer
-  python npc_sota_train.py --model nnunet --fold 0 --gpu 0 --epochs 500
+Training, full-volume validation and OOF labels all live on the preprocess cache grid
+(same cache, folds and Y labels as P0). With --select_by_sliding_window the best checkpoint
+is the one with the highest full-volume Dice_Y (checked every --full_val_every epochs).
+Outputs: results/sota_binary_y_<model>/fold<k>/ and OOF labels
+results/sota_binary_y_<model>_label_predictions/<case>_stage2_label.nrrd (P0 format).
+
+Usage (repo root; tools/sota_queue.py runs all models x folds):
+  python trainer/npc_sota_train.py --model nnunet --fold 0 --select_by_sliding_window \
+      --random_crop_prob 0.33
 """
 import argparse
 import csv
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Tuple, Optional
 
@@ -39,7 +46,7 @@ for _p in (PROJECT_ROOT, PROJECT_ROOT / "MIA" / "scripts"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from metrics_protocol import _dice, _hd95, mask_Y
+from metrics_protocol import DEFAULT_SPACING_ZYX, _dice, _hd95, mask_Y
 from npc_data import DATA_ROOT_DEFAULT, get_train_val_datasets, _get_all_cases, _create_folds
 from npc_losses import WeightedBCEDiceLoss, multiclass_dice_score
 import npc_preprocess as pp
@@ -68,7 +75,7 @@ from monai.networks.nets import DynUNet, SegResNet, AttentionUnet, UNETR, SwinUN
 
 # ==================== Config ====================
 RESULTS_ROOT = os.environ.get("CNV_RESULTS_ROOT", str(PROJECT_ROOT / "results"))
-EXPERIMENT_PREFIX = "npc_sota"
+EXPERIMENT_PREFIX = "sota_binary_y"  # legacy 6-class runs: npc_sota_<model>
 PATCH_SIZE: Tuple[int, int, int] = (128, 128, 128)
 BATCH_SIZE = 2
 NUM_CLASSES = 2  # BINARY_Y_ENDPOINT: bg + Y(1∪2∪3∪4); class5_bypass→bg
@@ -268,57 +275,53 @@ def _load_label_volume(label_path):
     return nib.load(str(label_path)).get_fdata().astype(np.int16)
 
 
-def validate_binary_y_sliding_window(model, data_root, fold, output_dir, patch_size,
-                                     num_classes, device, spacing_params_path=None,
-                                     step_size=0.5, num_folds=5, seed=42,
-                                     normalization='ct'):
-    """Full-volume sliding-window validation on the protocol Primary endpoint.
+def _save_label_nrrd(label: np.ndarray, save_path: str):
+    """Integer label map as gzip NRRD (int16) — same format as the P0 OOF labels."""
+    header = {'type': 'short', 'dimension': 3, 'sizes': list(label.shape),
+              'kinds': ['domain', 'domain', 'domain'], 'encoding': 'gzip', 'endian': 'little'}
+    _nrrd.write(str(save_path), label.astype(np.int16), header)
 
-    Same preprocessing as npc_baseline.validate_with_sliding_window; scores
-    Dice_Y and HD95_Y (mm) against GT Y = 1∪2∪3∪4 (class5_bypass -> background).
-    Writes per-case CSV and cv_results.json; returns the mean Dice_Y.
+
+def validate_binary_y_cache_sw(model, val_ids, cache_dir, output_dir, patch_size, device,
+                               fold, step_size=0.5, label_dir=None, with_hd95=True):
+    """Full-volume sliding-window validation on the protocol Primary endpoint, in cache space.
+
+    Runs on the preprocessed cache (`{case}_image.npy`, the grid and intensities the model
+    was trained on and the grid P0 and eval_protocol_metrics.py score on). Gaussian-weighted
+    windows with overlap = 1 - step_size (sigma = patch/8), as in the P0 Stage-2 driver;
+    Y = softmax foreground > 0.5. Scores Dice_Y and HD95_Y (mm) against cache GT
+    Y = 1∪2∪3∪4 (class5_bypass -> background). With label_dir, saves the OOF labels as
+    `{case}_stage2_label.nrrd`. Writes per-case CSV and cv_results.json; returns mean Dice_Y.
     """
+    from monai.inferers import sliding_window_inference
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    target_spacing, clip_lower, clip_upper = None, -200.0, 300.0
-    if spacing_params_path and Path(spacing_params_path).exists():
-        with open(spacing_params_path) as f:
-            params = json.load(f)
-        target_spacing = tuple(params['target_spacing'])
-        clip_lower = params.get('clip_lower', clip_lower)
-        clip_upper = params.get('clip_upper', clip_upper)
-
-    cases = _get_all_cases(data_root)
-    folds = _create_folds([c[0] for c in cases], num_folds=num_folds, seed=seed)
-    val_ids = set(folds[fold])
-    val_cases = [c for c in cases if c[0] in val_ids]
+    if label_dir is not None:
+        Path(label_dir).mkdir(parents=True, exist_ok=True)
     model.eval()
     rows = []
-    for patient_id, image_path, label_path in val_cases:
-        image_nii = nib.load(str(image_path))
-        zooms = image_nii.header.get_zooms()[:3]
-        original_spacing = (float(zooms[2]), float(zooms[1]), float(zooms[0]))
-        image = np.transpose(image_nii.get_fdata().astype(np.float32), (2, 0, 1))
-        pred = pp.sliding_window_inference(
-            image=image, model=model, patch_size=patch_size, num_classes=num_classes,
-            step_size=step_size, device=device, use_gaussian=True,
-            original_spacing=original_spacing if target_spacing is not None else None,
-            target_spacing=target_spacing, clip_lower=clip_lower, clip_upper=clip_upper,
-            normalization=normalization,
-        )
-        pred = np.transpose(pred, (1, 2, 0)).astype(np.int16)        # back to (x, y, z)
-        nib.save(nib.Nifti1Image(pred, affine=image_nii.affine, header=image_nii.header),
-                 str(out_dir / f"{patient_id}_pred.nii.gz"))
-        gt_y = mask_Y(_load_label_volume(label_path))
-        pred_y = pred > 0
-        if pred_y.shape != gt_y.shape:
-            print(f"  [skip] {patient_id}: pred {pred_y.shape} vs gt {gt_y.shape}")
-            continue
-        sp_xyz = tuple(float(z) for z in zooms)
-        row = {"patient_id": patient_id, "Dice_Y": _dice(pred_y, gt_y),
-               "HD95_Y": _hd95(pred_y, gt_y, sp_xyz)}
+    t0 = time.time()
+    for case_id in sorted(val_ids):
+        image = np.load(Path(cache_dir) / f"{case_id}_image.npy")
+        gt_y = mask_Y(np.load(Path(cache_dir) / f"{case_id}_label.npy"))
+        x = torch.from_numpy(np.ascontiguousarray(image, dtype=np.float32))[None, None].to(device)
+        with torch.no_grad(), torch.amp.autocast(device_type='cuda', dtype=AMP_DTYPE,
+                                                 enabled=AMP_DTYPE is not None):
+            logits = sliding_window_inference(
+                x, roi_size=patch_size, sw_batch_size=2, predictor=model,
+                overlap=1.0 - step_size, mode="gaussian", sigma_scale=0.125)
+        if isinstance(logits, (list, tuple)):
+            logits = logits[0]
+        prob_y = torch.softmax(logits.float(), dim=1)[0, 1]
+        pred_y = (prob_y > 0.5).cpu().numpy()
+        del x, logits, prob_y
+        if label_dir is not None:
+            _save_label_nrrd(pred_y.astype(np.int16), str(Path(label_dir) / f"{case_id}_stage2_label.nrrd"))
+        row = {"patient_id": case_id, "Dice_Y": _dice(pred_y, gt_y),
+               "HD95_Y": _hd95(pred_y, gt_y, DEFAULT_SPACING_ZYX) if with_hd95 else float("nan")}
         rows.append(row)
-        print(f"  {patient_id}: Dice_Y={row['Dice_Y']:.4f} HD95_Y={row['HD95_Y']:.2f} mm")
+        print(f"  {case_id}: Dice_Y={row['Dice_Y']:.4f} HD95_Y={row['HD95_Y']:.2f} mm", flush=True)
+    torch.cuda.empty_cache()
 
     if not rows:
         return None
@@ -329,18 +332,12 @@ def validate_binary_y_sliding_window(model, data_root, fold, output_dir, patch_s
         writer.writeheader()
         writer.writerows(rows)
     with open(out_dir / "cv_results.json", "w") as f:
-        json.dump({"fold": fold, "endpoint": "Y=1∪2∪3∪4", "num_cases": len(val_cases),
-                   "num_valid": len(rows), "mean_dice": mean_dice, "Dice_Y": mean_dice,
-                   "HD95_Y": mean_hd95}, f, indent=2)
-    print(f"[SOTA] fold {fold}: Dice_Y={mean_dice:.4f} HD95_Y={mean_hd95:.2f} mm (n={len(rows)})")
+        json.dump({"fold": fold, "endpoint": "Y=1∪2∪3∪4", "space": "preprocess cache",
+                   "num_cases": len(val_ids), "num_valid": len(rows), "mean_dice": mean_dice,
+                   "Dice_Y": mean_dice, "HD95_Y": mean_hd95}, f, indent=2)
+    print(f"[SOTA] fold {fold}: Dice_Y={mean_dice:.4f} HD95_Y={mean_hd95:.2f} mm (n={len(rows)}, "
+          f"{(time.time() - t0) / 60:.1f} min)", flush=True)
     return mean_dice
-
-
-def _validate_sw(**kwargs):
-    """Sliding-window validation on the active endpoint (binary Y unless legacy)."""
-    if BINARY_Y_ENDPOINT:
-        return validate_binary_y_sliding_window(**kwargs)
-    return validate_with_sliding_window(**kwargs)
 
 
 def protocol_primary_dice(pred, gt):
@@ -425,6 +422,8 @@ def build_model(model_name: str, in_channels: int = 1,
 
 
 def get_experiment_name(model_name: str) -> str:
+    if not BINARY_Y_ENDPOINT:
+        return f"npc_sota_{model_name}"
     return f"{EXPERIMENT_PREFIX}_{model_name}"
 
 
@@ -475,6 +474,8 @@ def main() -> None:
                         help="Use preprocessed cache (1=yes, 0=no). Default: 1")
     parser.add_argument("--cache_dir", type=str, default=DEFAULT_CACHE_DIR,
                         help="Path to preprocessed cache directory")
+    parser.add_argument("--resume", action="store_true",
+                        help="Continue from fold*/latest_checkpoint.pth (written at every full-val check)")
     args = parser.parse_args()
     global NUM_CLASSES, BINARY_Y_ENDPOINT
     if int(getattr(args, 'legacy_multiclass', 0)):
@@ -550,12 +551,15 @@ def main() -> None:
     # Data — use fast cached dataset if available, fall back to on-the-fly NPCDataset
     use_cache = bool(args.use_cache) and HAS_CACHED_DATASET and Path(args.cache_dir or "").exists()
     normalization = 'percentile' if use_cache else 'ct'  # Match training normalization
+    if BINARY_Y_ENDPOINT and not use_cache:
+        raise RuntimeError("binary Y endpoint trains and scores on the preprocess cache; "
+                           f"cache not found: {args.cache_dir}")
+    cases = _get_all_cases(DATA_ROOT_DEFAULT)
+    # seed-42 folds == extras/splits.json (checked 2026-10-21)
+    folds = _create_folds([c[0] for c in cases], num_folds=NUM_FOLDS, seed=42)
+    val_ids = set(folds[args.fold])
     if use_cache:
         from npc_data_cached import CachedSOTADataset
-        cases = _get_all_cases(DATA_ROOT_DEFAULT)
-        patient_ids = [c[0] for c in cases]
-        folds = _create_folds(patient_ids, num_folds=NUM_FOLDS, seed=42)
-        val_ids = set(folds[args.fold])
         train_cases = [(p, i, l) for p, i, l in cases if p not in val_ids]
         val_cases = [(p, i, l) for p, i, l in cases if p in val_ids]
         train_dataset = CachedSOTADataset(train_cases, patch_size=PATCH_SIZE,
@@ -599,7 +603,27 @@ def main() -> None:
     exp_dir.mkdir(parents=True, exist_ok=True)
     best_model_path = exp_dir / "best_model.pth"
     last_model_path = exp_dir / "last_model.pth"
+    latest_ckpt_path = exp_dir / "latest_checkpoint.pth"
+    label_dir = Path(RESULTS_ROOT) / f"{exp_name}_label_predictions"  # OOF labels, all folds
     print(f"Output: {exp_dir}")
+
+    def run_sw(output_dir, save_labels=False):
+        """Full-volume sliding-window validation of the current model on this fold.
+
+        Periodic checks select by Dice_Y only and skip HD95_Y (the distance transform on
+        early, noisy predictions dominates the check time); the final best-model pass
+        scores both and writes the OOF labels.
+        """
+        if BINARY_Y_ENDPOINT:
+            return validate_binary_y_cache_sw(
+                model=model, val_ids=val_ids, cache_dir=args.cache_dir, output_dir=output_dir,
+                patch_size=PATCH_SIZE, device=device, fold=args.fold, step_size=args.step_size,
+                label_dir=label_dir if save_labels else None, with_hd95=save_labels)
+        return validate_with_sliding_window(
+            model=model, data_root=DATA_ROOT_DEFAULT, fold=args.fold, output_dir=output_dir,
+            patch_size=PATCH_SIZE, num_classes=NUM_CLASSES, device=str(device),
+            spacing_params_path=args.spacing_params, step_size=args.step_size,
+            num_folds=NUM_FOLDS, seed=42, normalization=normalization)
 
     # ---- Val-only mode ----
     if args.val_only:
@@ -613,14 +637,7 @@ def main() -> None:
         ckpt = torch.load(ckpt_path, map_location=device)
         state = ckpt.get("model_state", ckpt.get("model_state_dict", ckpt))
         model.load_state_dict(state)
-        val_output_dir = str(exp_dir / "val_predictions_best")
-        _validate_sw(
-            model=model, data_root=DATA_ROOT_DEFAULT, fold=args.fold,
-            output_dir=val_output_dir, patch_size=PATCH_SIZE,
-            num_classes=NUM_CLASSES, device=str(device),
-            spacing_params_path=args.spacing_params, step_size=args.step_size,
-            num_folds=NUM_FOLDS, seed=42, normalization=normalization,
-        )
+        run_sw(str(exp_dir / "val_predictions_best"), save_labels=True)
         print("Validation complete.")
         return
 
@@ -652,6 +669,9 @@ def main() -> None:
         "lr": args.lr, "batch_size": args.batch_size,
         "patch_size": list(PATCH_SIZE), "num_classes": NUM_CLASSES,
         "target_spacing": list(target_spacing) if target_spacing else None,
+        "random_crop_prob": args.random_crop_prob, "full_val_every": args.full_val_every,
+        "select_by_sliding_window": args.select_by_sliding_window,
+        "cache_dir": args.cache_dir if use_cache else None, "val_ids": sorted(val_ids),
     }
     with open(exp_dir / "config.json", "w") as f:
         json.dump(config, f, indent=2)
@@ -660,17 +680,42 @@ def main() -> None:
     best_val_dice = 0.0
     best_epoch = 0
     no_improve = 0
+    start_epoch = 1
+    if args.resume and latest_ckpt_path.exists():
+        ckpt = torch.load(latest_ckpt_path, map_location=device)
+        model.load_state_dict(ckpt["model_state"])
+        optimizer.load_state_dict(ckpt["optimizer_state"])
+        scheduler.load_state_dict(ckpt["scheduler_state"])
+        if scaler is not None and ckpt.get("scaler_state"):
+            scaler.load_state_dict(ckpt["scaler_state"])
+        best_val_dice, best_epoch = ckpt["best_val_dice"], ckpt["best_epoch"]
+        no_improve = ckpt["no_improve"]
+        start_epoch = ckpt["epoch"] + 1
+        print(f"Resumed from {latest_ckpt_path} at epoch {ckpt['epoch']} "
+              f"(best {best_val_dice:.4f} @ ep{best_epoch}, no_improve={no_improve})")
+    elif args.resume:
+        print(f"[WARN] --resume but no {latest_ckpt_path}; starting from scratch")
+
+    def save_latest(epoch):
+        torch.save({"epoch": epoch, "model_state": model.state_dict(),
+                    "optimizer_state": optimizer.state_dict(),
+                    "scheduler_state": scheduler.state_dict(),
+                    "scaler_state": scaler.state_dict() if scaler is not None else None,
+                    "best_val_dice": best_val_dice, "best_epoch": best_epoch,
+                    "no_improve": no_improve}, str(latest_ckpt_path) + ".tmp")
+        os.replace(str(latest_ckpt_path) + ".tmp", latest_ckpt_path)
 
     print(f"\n{'='*70}")
     print(f"Training {args.model} fold {args.fold} for {args.epochs} epochs")
     print(f"  AMP: {AMP_DTYPE}, cache: {'yes' if use_cache else 'no'}, val every {VALIDATE_EVERY_N}ep")
     print(f"{'='*70}")
 
-    with open(log_path, "w", newline="") as f:
+    with open(log_path, "a" if start_epoch > 1 else "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["epoch", "train_loss", "train_dice", "val_loss", "val_dice", "lr"])
+        if start_epoch == 1:
+            writer.writerow(["epoch", "train_loss", "train_dice", "val_loss", "val_dice", "lr"])
 
-        for epoch in range(1, args.epochs + 1):
+        for epoch in range(start_epoch, args.epochs + 1):
             train_loss, train_dice = train_one_epoch(
                 model, train_loader, optimizer, loss_fn, device, scaler=scaler,
             )
@@ -736,13 +781,7 @@ def main() -> None:
                     # Dice as the best-model criterion. The model is left untouched
                     # (no best-model reload), so training continues undisturbed.
                     print(f"\n  [Full val @ epoch {epoch}] Sliding-window inference on current model...")
-                    sw_dice = _validate_sw(
-                        model=model, data_root=DATA_ROOT_DEFAULT, fold=args.fold,
-                        output_dir=str(exp_dir / f"val_predictions_ep{epoch:03d}"),
-                        patch_size=PATCH_SIZE, num_classes=NUM_CLASSES, device=str(device),
-                        spacing_params_path=args.spacing_params, step_size=args.step_size,
-                        num_folds=NUM_FOLDS, seed=42, normalization=normalization,
-                    )
+                    sw_dice = run_sw(str(exp_dir / f"val_predictions_ep{epoch:03d}"))
                     model.train()
                     if sw_dice is not None:
                         if sw_dice > best_val_dice:
@@ -759,19 +798,13 @@ def main() -> None:
                             no_improve += 1
                             print(f"  [Full val @ epoch {epoch}] sw_dice={sw_dice:.4f} "
                                   f"(best {best_val_dice:.4f} @ ep{best_epoch})")
+                    save_latest(epoch)
                 else:
                     print(f"\n  [Full val @ epoch {epoch}] Loading best model for sliding-window inference...")
                     if best_model_path.exists():
                         ckpt = torch.load(best_model_path, map_location=device)
                         model.load_state_dict(ckpt["model_state"])
-                        val_output_dir = str(exp_dir / f"val_predictions_ep{epoch:03d}")
-                        _validate_sw(
-                            model=model, data_root=DATA_ROOT_DEFAULT, fold=args.fold,
-                            output_dir=val_output_dir, patch_size=PATCH_SIZE,
-                            num_classes=NUM_CLASSES, device=str(device),
-                            spacing_params_path=args.spacing_params, step_size=args.step_size,
-                            num_folds=NUM_FOLDS, seed=42, normalization=normalization,
-                        )
+                        run_sw(str(exp_dir / f"val_predictions_ep{epoch:03d}"))
 
     # Save last model
     torch.save(
@@ -789,13 +822,7 @@ def main() -> None:
         print(f"Loaded best model (Epoch {ckpt['epoch']})")
 
         val_output_dir = str(exp_dir / "val_predictions_best")
-        _validate_sw(
-            model=model, data_root=DATA_ROOT_DEFAULT, fold=args.fold,
-            output_dir=val_output_dir, patch_size=PATCH_SIZE,
-            num_classes=NUM_CLASSES, device=str(device),
-            spacing_params_path=args.spacing_params, step_size=args.step_size,
-            num_folds=NUM_FOLDS, seed=42, normalization=normalization,
-        )
+        run_sw(val_output_dir, save_labels=True)
 
         # Copy cv_results.json to fold directory for easy aggregation
         import shutil

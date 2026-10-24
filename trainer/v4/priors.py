@@ -21,6 +21,9 @@ MIN_ICP_POINTS = 20
 MAX_ICP_POINTS = 4000
 SCALE_BOUNDS = (0.8, 1.25)
 ATLAS_ROI_THR = 0.02  # atlas support threshold for the ROI (dev check 2026-10-23, V4_DEV_LOG)
+# Target cases are aligned rigidly (scale fixed at 1): their predicted class-4 cloud is often partial,
+# and a free scale then shrinks the atlas (compared on training cases only, V4_DEV_LOG 2026-10-23).
+TARGET_SCALE_BOUNDS = (1.0, 1.0)
 
 
 # ---------------- similarity ICP ----------------
@@ -185,7 +188,7 @@ class Atlas:
         return tot / max(n, 1)
 
     def target_transforms(self, c4_pred_mask, image):
-        """Per side: (T target mm -> template mm or None, info). ICP on the predicted class-4 points of
+        """Per side: (T target mm -> template mm or None, info). Rigid ICP on the predicted class-4 points of
         that side; a side with too few points uses one bilateral ICP; no points at all -> None."""
         mid = head_midline(image, None)
         pts = side_points(c4_pred_mask, mid, self.spacing)
@@ -194,10 +197,10 @@ class Atlas:
         out = []
         for s in (0, 1):
             if len(pts[s]) >= MIN_ICP_POINTS:
-                T, rmse = icp_similarity(pts[s], self.c4_pts[s])
+                T, rmse = icp_similarity(pts[s], self.c4_pts[s], scale_bounds=TARGET_SCALE_BOUNDS)
                 how = "side"
             elif len(all_t) >= MIN_ICP_POINTS:
-                T, rmse = icp_similarity(all_t, all_tpl)
+                T, rmse = icp_similarity(all_t, all_tpl, scale_bounds=TARGET_SCALE_BOUNDS)
                 how = "bilateral"
             else:
                 out.append((None, {"side": s, "how": "none"}))
