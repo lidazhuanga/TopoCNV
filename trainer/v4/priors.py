@@ -87,6 +87,21 @@ def side_points(mask_c4, mid, spacing=SPACING):
     return out
 
 
+def bilateral_c4_distance_mm(c4_mask, mid, spacing=SPACING):
+    """D1-AM1 QC signal D: left-right distance (mm) between the per-side clean class-4
+    point-cloud centroids (true centroids, not bbox centres; axis 1 = left-right).
+    None if either side is empty or the midline is unknown -> structural fallback."""
+    if mid is None:
+        return None
+    pts = side_points(c4_mask, mid, spacing)
+    cents = []
+    for p in pts:
+        if len(p) < 1:
+            return None
+        cents.append(p.mean(0))
+    return abs(float(cents[1][1] - cents[0][1]))
+
+
 # ---------------- prior (a) and (b) ----------------
 
 def dist_prior(c4_clean_box, spacing=SPACING, trunc_mm=DIST_TRUNC_MM):

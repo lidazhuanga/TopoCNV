@@ -135,6 +135,11 @@ def prep(args):
     meta = {"fold": k, "variant": variant, "margin_mm": args.margin, "shuffle": args.shuffle,
             "priors_dir": str(pdir), "created": datetime.now().isoformat(), "cases": {}}
     cases = train_cases(k) if variant == "dev" else all_cases()   # dev: T_k only (V4_PLAN §6)
+    qc_path = ROOT / "configs" / "v4_qc" / f"fold{k}.json"
+    if qc_path.exists():
+        qc = json.loads(qc_path.read_text())
+        assert int(args.margin) == int(qc["margin"]), \
+            f"fold {k}: --margin {args.margin} != frozen D1-AM1 margin {qc['margin']}"
     if args.cases:
         want = set(args.cases.split(","))
         unknown = want - set(cases)
@@ -145,6 +150,10 @@ def prep(args):
         assert not extra, f"--cases requires an empty/singleton raw dir; found foreign files: {extra[:5]}"
     for i, c in enumerate(cases):
         rec = json.loads((pdir / f"{c}_roi.json").read_text())
+        if qc_path.exists():
+            q = rec.get("qc", {})
+            assert q.get("amendment") == "D1-AM1" and "fallback" in q, \
+                f"{c}: roi record has no D1-AM1 qc block — priors were built without --qc"
         shape = tuple(rec["shape"])
         boxes = [sd["boxes"][str(args.margin)] for sd in rec["sides"] if sd["boxes"][str(args.margin)] is not None]
         crop = union_box(boxes) if boxes else [[0, n] for n in shape]
@@ -184,6 +193,14 @@ def prep(args):
     # fingerprint: nnUNetTrainer.on_train_start copies it unconditionally; prep must provide it
     subprocess.run([bin_cmd("nnUNetv2_extract_fingerprint"), "-d", str(did), "-np", str(args.np)],
                    env=env(), check=True)
+    # pre-unpack once here (serialized by the queue): without it, two trainers starting on the
+    # same dataset race inside on_train_start's unpack and truncate each other's .npy files
+    pre_folder = pre / f"{PLANS}_{CONFIG}"
+    subprocess.run([sys.executable, "-c",
+                    "from nnunetv2.training.dataloading.utils import unpack_dataset; "
+                    f"unpack_dataset('{pre_folder}', unpack_segmentation=True, "
+                    f"overwrite_existing=False, num_processes={args.np}, verify_npy=True)"],
+                   env=env(), check=True)
     if not args.cases:                      # smoke subsets must not mark the production queue done
         done = ROOT / "log" / "v4" / f"nnprep_{did}.done"
         done.parent.mkdir(parents=True, exist_ok=True)
@@ -222,6 +239,15 @@ def gate_report(args):
     if missing:
         raise SystemExit(f"report phase needs all 5 frozen configs (configs/v4_frozen/fold*.json); "
                          f"missing folds {missing}")
+    qc = ROOT / "configs" / "v4_qc" / f"fold{args.fold}.json"
+    if not qc.exists():
+        raise SystemExit(f"missing {qc}: the D1-AM1 gate must be frozen before report training")
+    qcfg = json.loads(qc.read_text())
+    if qcfg.get("fold") != args.fold or qcfg.get("amendment") != "D1-AM1":
+        raise SystemExit(f"{qc}: bad fold/amendment ({qcfg.get('fold')}/{qcfg.get('amendment')})")
+    if "margin" in cfg and int(cfg["margin"]) != int(qcfg["margin"]):
+        raise SystemExit(f"fold {args.fold}: frozen margin {cfg['margin']} != D1-AM1 margin "
+                         f"{qcfg['margin']}")
     cfg = json.loads((fz / f"fold{args.fold}.json").read_text()).get("chosen_config", {})
     if "margin" in cfg and int(cfg["margin"]) != int(args.margin):
         raise SystemExit(f"fold {args.fold}: --margin {args.margin} != frozen margin {cfg['margin']}")
@@ -242,6 +268,17 @@ def train(args):
         did, dname = dataset_id(args.fold, args.variant, args.shuffle), dataset_name(args.fold, args.variant, args.shuffle)
         trainer, split = args.trainer, 0
     fd = results_dir(did, dname, trainer, split)
+    if not args.r0:      # Dataset519 is nnU-Net stock and already unpacked; v4 datasets need the guard
+        import fcntl
+        pre_folder = NNUNET_HOME / "nnUNet_preprocessed" / dname / f"{PLANS}_{CONFIG}"
+        lock = pre_folder / ".unpack_lock"
+        with open(lock, "w") as lf:
+            fcntl.flock(lf, fcntl.LOCK_EX)      # serialize the first unpack across arms
+            subprocess.run([sys.executable, "-c",
+                            "from nnunetv2.training.dataloading.utils import unpack_dataset; "
+                            f"unpack_dataset('{pre_folder}', unpack_segmentation=True, "
+                            "overwrite_existing=False, num_processes=8, verify_npy=True)"],
+                           env=env(), check=True)
     cmd = [bin_cmd("nnUNetv2_train"), str(did), CONFIG, str(split), "-tr", trainer, "-p", PLANS]
     if (fd / "checkpoint_final.pth").exists():
         done = (fd / "validation" / "summary.json").exists() if args.r0 else (fd / "validation_v4" / "DONE").exists()

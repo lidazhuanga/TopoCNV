@@ -45,7 +45,8 @@ def main():
                     help="stage1: which Stage-1 tier to schedule (V4_PLAN §5)")
     ap.add_argument("--config")
     ap.add_argument("--variant", choices=["dev", "report"], default="dev")
-    ap.add_argument("--margin", type=int)
+    ap.add_argument("--margin", type=int,
+                    help="nnprep: default = the frozen D1-AM1 margin in configs/v4_qc/fold{k}.json")
     ap.add_argument("--shuffle", action="store_true")
     ap.add_argument("--trainer")
     ap.add_argument("--name")
@@ -70,7 +71,8 @@ def main():
                 pfx = "s1_" if v == "report" else "s1dev_"
                 add(jobs, {"key": f"priors_{v}_f{k}", "kind": "cpu",
                            "deps": [f"{pfx}f{k}_i{j}" for j in range(N_INNER)],
-                           "cmd": [PY, "tools/v4_build_priors.py", "--fold", str(k), "--variant", v, "--workers", "24"],
+                           "cmd": [PY, "tools/v4_build_priors.py", "--fold", str(k), "--variant", v,
+                                   "--workers", "24", "--qc", f"configs/v4_qc/fold{k}.json"],
                            "done": f"results/v4_priors/fold{k}_{v}/atlas_meta.json"})
         elif args.what == "r0dev":
             add(jobs, {"key": f"r0dev_f{k}", "kind": "gpu",
@@ -78,11 +80,19 @@ def main():
                                "--r0", "--name", "r0_dev"],
                        "done": f"results/v4_dev_preds/r0_dev/fold{k}/EXPORTED"})
         elif args.what == "nnprep":
+            if args.variant == "dev" and args.shuffle:
+                raise SystemExit("--shuffle is only defined for the report variant")
             sh = "shuf" if args.shuffle else ""
             dname = {"dev": 520, "report": 530 if args.shuffle else 510}[args.variant] + k
+            margin = args.margin
+            if margin is None:
+                qcp = ROOT / "configs" / "v4_qc" / f"fold{k}.json"
+                if not qcp.exists():
+                    raise SystemExit(f"nnprep needs --margin or {qcp}")
+                margin = int(json.loads(qcp.read_text())["margin"])
             add(jobs, {"key": f"nnprep_{args.variant}{sh}_f{k}", "kind": "cpu", "deps": [f"priors_{args.variant}_f{k}"],
                        "cmd": [NNPY, "tools/v4_nnunet.py", "prep", "--fold", str(k), "--variant", args.variant,
-                               "--margin", str(args.margin)] + (["--shuffle"] if args.shuffle else []),
+                               "--margin", str(margin)] + (["--shuffle"] if args.shuffle else []),
                        "done": f"log/v4/nnprep_{dname}.done"})
         elif args.what == "nntrain":
             sh = "shuf" if args.shuffle else ""
@@ -94,8 +104,6 @@ def main():
                                "--trainer", args.trainer, "--name", args.name] + (["--shuffle"] if args.shuffle else []),
                        "done": out})
         else:
-            if args.variant == "dev" and args.shuffle:
-                raise SystemExit("--shuffle is only defined for the report variant")
             cfg = load_config(ROOT / args.config)
             add(jobs, {"key": f"{cfg['name']}_f{k}", "kind": "gpu", "resume_arg": "--resume",
                        "cmd": [PY, "-m", "trainer.v4.train_stage2", "--config", args.config, "--fold", str(k)],
