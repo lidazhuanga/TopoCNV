@@ -182,5 +182,17 @@ class TestChannel0Only(unittest.TestCase):
         self.assertTrue(torch.equal(d["segmentation"], seg))
 
 
+class TestNOutLabelManager(unittest.TestCase):
+    def test_reports_n_out_and_delegates(self):
+        lm = T._NOutLabelManager(type("LM", (), {"num_segmentation_heads": 6,
+                                                                 "foreground_labels": [1, 2, 3, 4]})(), 7)
+        self.assertEqual(lm.num_segmentation_heads, 7)
+        self.assertEqual(lm.foreground_labels, [1, 2, 3, 4])
+
+    def test_arm_head_counts(self):
+        self.assertEqual(T.nnUNetTrainerV4_R1._n_out(), 2)
+        self.assertEqual(T.nnUNetTrainerV4_SMOKE_Pabc_Vign_S10._n_out(), 7)
+
+
 if __name__ == "__main__":
     unittest.main()

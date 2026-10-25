@@ -78,11 +78,17 @@ def write_nifti(arr_zyx, path, dtype):
     nib.save(nib.Nifti1Image(np.ascontiguousarray(arr_zyx.transpose(2, 1, 0)).astype(dtype), affine), str(path))
 
 
-def splits_for(fold, variant):
+def splits_for(fold, variant, cases=None):
     if variant == "dev":
-        tr, iv = internal_split(fold)
-        return [{"train": tr, "val": iv}]
-    return [{"train": train_cases(fold), "val": report_cases(fold)}]
+        entries = [{"train": list(internal_split(fold)[0]), "val": list(internal_split(fold)[1])}]
+    else:
+        entries = [{"train": list(train_cases(fold)), "val": list(report_cases(fold))}]
+    if cases:
+        keep = set(cases)
+        entries = [{"train": [c for c in e["train"] if c in keep],
+                    "val": [c for c in e["val"] if c in keep]} for e in entries]
+        assert all(e["train"] and e["val"] for e in entries), "case subset emptied a split"
+    return entries
 
 
 def widen_plans(src, dst_name):
@@ -129,6 +135,14 @@ def prep(args):
     meta = {"fold": k, "variant": variant, "margin_mm": args.margin, "shuffle": args.shuffle,
             "priors_dir": str(pdir), "created": datetime.now().isoformat(), "cases": {}}
     cases = train_cases(k) if variant == "dev" else all_cases()   # dev: T_k only (V4_PLAN §6)
+    if args.cases:
+        want = set(args.cases.split(","))
+        unknown = want - set(cases)
+        assert not unknown, f"cases not in this variant's set: {sorted(unknown)}"
+        cases = [c for c in cases if c in want]
+        extra = [p.name for p in (raw / "imagesTr").glob("*.nii.gz")
+                 if p.name.split("_")[0] not in want]
+        assert not extra, f"--cases requires an empty/singleton raw dir; found foreign files: {extra[:5]}"
     for i, c in enumerate(cases):
         rec = json.loads((pdir / f"{c}_roi.json").read_text())
         shape = tuple(rec["shape"])
@@ -161,12 +175,19 @@ def prep(args):
     src = NNUNET_HOME / "nnUNet_preprocessed" / SRC_DATASET / f"{PLANS}.json"
     (pre / f"{PLANS}.json").write_text(json.dumps(widen_plans(src, name), indent=2))
     shutil.copy(raw / "dataset.json", pre / "dataset.json")
-    subprocess.run([bin_cmd("nnUNetv2_preprocess"), "-d", str(dataset_id(k, variant, args.shuffle)),
+    # validate splits before the expensive preprocessing (P2-6)
+    (pre / "splits_final.json").write_text(json.dumps(
+        splits_for(k, variant, args.cases.split(",") if args.cases else None), indent=1))
+    did = dataset_id(k, variant, args.shuffle)
+    subprocess.run([bin_cmd("nnUNetv2_preprocess"), "-d", str(did),
                     "-plans_name", PLANS, "-c", CONFIG, "-np", str(args.np)], env=env(), check=True)
-    (pre / "splits_final.json").write_text(json.dumps(splits_for(k, variant), indent=1))
-    done = ROOT / "log" / "v4" / f"nnprep_{dataset_id(k, variant, args.shuffle)}.done"
-    done.parent.mkdir(parents=True, exist_ok=True)
-    done.write_text(f"{datetime.now().isoformat()} {name} margin {args.margin}\n")
+    # fingerprint: nnUNetTrainer.on_train_start copies it unconditionally; prep must provide it
+    subprocess.run([bin_cmd("nnUNetv2_extract_fingerprint"), "-d", str(did), "-np", str(args.np)],
+                   env=env(), check=True)
+    if not args.cases:                      # smoke subsets must not mark the production queue done
+        done = ROOT / "log" / "v4" / f"nnprep_{did}.done"
+        done.parent.mkdir(parents=True, exist_ok=True)
+        done.write_text(f"{datetime.now().isoformat()} {name} margin {args.margin}\n")
     print(f"prepared {name}")
 
 
@@ -182,7 +203,7 @@ def prep_r0dev(_):
     p["dataset_name"] = R0DEV[1]
     (pre / f"{PLANS}.json").write_text(json.dumps(p, indent=2))
     splits = []
-    for k in (0, 1):
+    for k in range(5):                       # nested CV needs R0-dev on every fold (V4_PLAN §6)
         tr, iv = internal_split(k)
         splits.append({"train": tr, "val": iv})
     (pre / "splits_final.json").write_text(json.dumps(splits, indent=1))
@@ -212,8 +233,8 @@ def gate_report(args):
 def train(args):
     if args.variant == "report":
         gate_report(args)
-    if args.r0 and args.fold not in (0, 1):
-        raise SystemExit("--r0 (Dataset519) has dev splits for folds 0 and 1 only")
+    if args.r0 and not (0 <= args.fold < 5):
+        raise SystemExit("--r0 (Dataset519) has dev splits for all 5 folds (V4_PLAN §6)")
     if args.r0:
         did, dname, trainer, split = R0DEV[0], R0DEV[1], "nnUNetTrainer_300epochs", args.fold
         assert args.variant == "dev"
@@ -239,6 +260,10 @@ def export(args, fd):
                      "encoding": "gzip", "endian": "little"}
     k = args.fold
     cases = internal_split(k)[1] if args.variant == "dev" else report_cases(k)
+    if args.cases:
+        keep = set(args.cases.split(","))
+        cases = [c for c in cases if c in keep]
+        assert cases, "no requested case is a validation case of this fold/variant"
     if args.variant == "dev":
         out = RESULTS / "v4_dev_preds" / args.name / f"fold{k}"
     else:
@@ -282,6 +307,7 @@ def main():
     p.add_argument("--shuffle", action="store_true")
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--np", type=int, default=8)
+    p.add_argument("--cases", default="", help="comma list (smoke tests): tiny dataset of these cases only")
     sub.add_parser("prep_r0dev")
     t = sub.add_parser("train")
     t.add_argument("--fold", type=int, required=True)
@@ -290,6 +316,7 @@ def main():
     t.add_argument("--r0", action="store_true")
     t.add_argument("--shuffle", action="store_true")
     t.add_argument("--name", required=True, help="output name (dev candidate or report arm)")
+    t.add_argument("--cases", default="", help="comma list (smoke tests): export only these cases")
     a = ap.parse_args()
     {"install": install, "prep": prep, "prep_r0dev": prep_r0dev, "train": train}[a.cmd](a)
 

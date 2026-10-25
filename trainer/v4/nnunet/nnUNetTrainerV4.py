@@ -169,6 +169,23 @@ class V4Loss(nn.Module):
 
 # ---------------- trainer ----------------
 
+class _NOutLabelManager:
+    """Delegates to the stock LabelManager but reports the trainer's true output channels
+    (2 Y + 5 visibility when the visibility head is on): sliding-window inference allocates
+    its logits buffer from label_manager.num_segmentation_heads, which is otherwise the raw
+    label count (6) and mismatches the network output (7)."""
+
+    def __init__(self, inner, n_out):
+        self._inner, self._n_out = inner, n_out
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    @property
+    def num_segmentation_heads(self):
+        return self._n_out
+
+
 class nnUNetTrainerV4(nnUNetTrainer):
     PRIORS = ()          # kept prior channels, subset of ('a', 'b', 'c')
     VIS = None           # None | 'background' | 'ignore'
@@ -195,6 +212,7 @@ class nnUNetTrainerV4(nnUNetTrainer):
                  device=torch.device("cuda")):
         super().__init__(plans, configuration, fold, dataset_json, unpack_dataset, device)
         self.num_epochs = 300
+        self.label_manager = _NOutLabelManager(self.label_manager, self._n_out())
         keep = {PRIOR_CHANNELS[p] for p in self.PRIORS}
         self.zero_channels = [c for c in PRIOR_CHANNELS.values() if c not in keep]
 
@@ -303,6 +321,7 @@ class nnUNetTrainerV4(nnUNetTrainer):
         predictor.manual_initialization(self.network, self.plans_manager, self.configuration_manager, None,
                                         self.dataset_json, self.__class__.__name__,
                                         self.inference_allowed_mirroring_axes)
+        predictor.label_manager = self.label_manager   # 7 heads (2 Y + 5 vis), not the raw label count
         out_dir = os.path.join(self.output_folder, "validation_v4")
         os.makedirs(out_dir, exist_ok=True)
         _, dataset_val = self.get_tr_and_val_datasets()
@@ -345,8 +364,13 @@ def _arm(name, priors=(), vis=None, skel_w=0.0, smoke=False):
     attrs = {"PRIORS": tuple(priors), "VIS": vis, "SKEL_W": float(skel_w), "N_OUT": n_out,
              "build_network_architecture": staticmethod(build_network_architecture)}
     if smoke:
-        def __init__(self, *a, **kw):
-            nnUNetTrainerV4.__init__(self, *a, **kw)
+        # keep the exact base signature (by name): nnUNetTrainer.__init__ rebuilds its init
+        # kwargs from the caller frame's code object, so a *args/**kwargs wrapper makes it
+        # KeyError on the wrapper's own argument names (found by the 2026-10-25 smoke).
+        def __init__(self, plans, configuration, fold, dataset_json, unpack_dataset=True,
+                     device=torch.device("cuda")):
+            nnUNetTrainerV4.__init__(self, plans, configuration, fold, dataset_json,
+                                     unpack_dataset, device)
             self.num_epochs, self.num_iterations_per_epoch, self.num_val_iterations_per_epoch = 2, 5, 2
         attrs["__init__"] = __init__
     cls = type(name, (nnUNetTrainerV4,), attrs)
