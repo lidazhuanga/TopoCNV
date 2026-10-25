@@ -68,6 +68,10 @@ def main():
     ap.add_argument("--min_free_mb", type=int, default=40000)
     ap.add_argument("--job_mb", type=int, default=30000, help="expected peak memory of one v4 run")
     ap.add_argument("--max_gpu_jobs", type=int, default=4)
+    ap.add_argument("--max_per_gpu", type=int, default=1,
+                    help="our concurrent GPU jobs per card (user 2026-10-25: raised from the "
+                         "hard 1-per-card rule; each placed job still reserves job_mb so the "
+                         "card keeps >= min_free_mb free)")
     ap.add_argument("--max_cpu_jobs", type=int, default=2)
     ap.add_argument("--poll", type=int, default=120)
     args = ap.parse_args()
@@ -118,7 +122,6 @@ def main():
         act_cpu = [k for k in active if state[k].get("gpu") is None]
         if pending and not stop:
             free = gpu_free_mb()
-            ours = {state[k]["gpu"] for k in act_gpu}
             protect = nnunetv2_waiting()
             for j in pending:
                 key = j["key"]
@@ -127,7 +130,12 @@ def main():
                     if len(act_gpu) >= args.max_gpu_jobs:
                         continue
                     need = args.min_free_mb + (args.job_mb if protect else 0)
-                    cands = [g for g in gpus if g not in ours and free.get(g, 0) >= max(need, args.min_free_mb)]
+                    per_gpu = {}
+                    for k in act_gpu:
+                        per_gpu[state[k]["gpu"]] = per_gpu.get(state[k]["gpu"], 0) + 1
+                    cands = [g for g in gpus if per_gpu.get(g, 0) < args.max_per_gpu
+                             and free.get(g, 0) - args.job_mb * per_gpu.get(g, 0)
+                             >= max(need, args.min_free_mb)]
                     if not cands:
                         continue
                     gpu = max(cands, key=lambda g: free[g])
@@ -148,7 +156,6 @@ def main():
                                   started=now())
                 if gpu is not None:
                     act_gpu.append(key)
-                    ours.add(gpu)
                     free[gpu] -= args.job_mb
                 else:
                     act_cpu.append(key)
