@@ -51,4 +51,6 @@ $PY MIA/scripts/eval_protocol_metrics.py --pred_dir results/v4_dev_preds/smoke_n
 N=$(awk -F, 'NR>1 && $1!="MEAN"' "$SCRATCH/smoke_eval.csv" | wc -l)   # evaluator appends a MEAN row
 if [ "$N" -ne 1 ]; then echo "SMOKE FAIL: expected exactly 1 scored case, got $N"; exit 1; fi
 grep -q "Empty_pred_Y" "$SCRATCH/smoke_eval.csv" || { echo "SMOKE FAIL: no Empty_pred_Y column"; exit 1; }
+grep -q "wDSC_Y_0.50" "$SCRATCH/smoke_eval.csv" || { echo "SMOKE FAIL: no wDSC_Y_0.50 column"; exit 1; }
+grep -q "Recall_GT3" "$SCRATCH/smoke_eval.csv" || { echo "SMOKE FAIL: no Recall_GT3 column"; exit 1; }
 echo "SMOKE_OK (values meaningless; plumbing validated)"

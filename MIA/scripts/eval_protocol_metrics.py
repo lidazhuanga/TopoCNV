@@ -228,7 +228,8 @@ def main():
         return
 
     keys = ["Dice_Y", "HD95_Y", "ASSD_Y", "Dice_123", "Dice_c4", "Dice_L", "Precision_L",
-            "Recall_L", "L_over_Y", "Dice_L_legacy", "Dice_H", "Dice_123_s1full", "Dice_c4_s1full"] + list(V04_KEYS) + ["Empty_pred_Y"]
+            "Recall_L", "L_over_Y", "Dice_L_legacy", "Dice_H", "Dice_123_s1full", "Dice_c4_s1full"] + list(V04_KEYS) + ["Empty_pred_Y",
+    "wDSC_Y_0.25", "wDSC_Y_0.50", "wDSC_Y_0.75", "Recall_GT3"]
     means = {k: float(np.nanmean([r[k] for r in rows])) for k in keys}
     sources = sorted({str(r.get("Secondary_source", "")) for r in rows})
     print("\n=== mean over", len(rows), "cases ===")
@@ -240,6 +241,12 @@ def main():
     print(f"  Secondary_source: {','.join(sources) if sources else '?'}")
     n_empty = int(sum(bool(r.get("Empty_pred_Y", 0.0)) for r in rows))
     print(f"  empty_pred_Y: {n_empty}/{len(rows)} (HD95_Y of these = case-diagonal penalty)")
+    r3 = [float(r["Recall_GT3"]) for r in rows if np.isfinite(float(r.get("Recall_GT3", "nan")))]
+    nw = sum(1 for r in rows if np.isfinite(float(r.get("wDSC_Y_0.50", "nan"))))
+    print(f"  wDSC_Y_0.50: {means.get('wDSC_Y_0.50', float('nan')):.4f} (n={nw}, secondary "
+          f"V4-AM-C3W-01)")
+    if r3:
+        print(f"  Recall_GT3: {sum(r3) / len(r3):.4f} (n={len(r3)})")
 
     if args.csv:
         out = Path(args.csv)

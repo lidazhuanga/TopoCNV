@@ -261,6 +261,47 @@ def _precision(pred: np.ndarray, gt: np.ndarray) -> float:
     return float((pred & gt).sum() / n)
 
 
+def _wdice(pred: np.ndarray, gt_labels: ArrayLike, lam: float) -> float:
+    """wDSC_Y(lam) per V4-AM-C3W-01: reference-evidence weighting of the binary-Y Dice.
+    w = lam where the original GT label == 3 (probable course, drawn from anatomical
+    inference rather than image evidence), w = 1 everywhere else (including background and
+    class 5, so false positives outside Y are never discounted). The same w multiplies the
+    intersection, the prediction volume and the reference volume; lam = 1 is exactly _dice.
+    NaN when both sides are empty, 0 when the prediction is empty and the reference is not
+    (same conventions as _dice). `pred` must already be the binary Y mask (bool / 0-1)."""
+    c = _c3w_counts(pred, gt_labels)
+    return _wdice_from_counts(c, lam)
+
+
+def _c3w_counts(pY: np.ndarray, gt_labels: ArrayLike) -> dict:
+    """Six voxel counts behind wDSC_Y / Recall_GT3 (count-based: no float64 temporaries,
+    ~50x faster than the weighted-array form). GT==3 is a subset of Y by construction."""
+    p = np.asarray(pY) > 0
+    g3 = np.asarray(gt_labels) == 3
+    g = mask_Y(gt_labels)
+    return {"i3": int(np.count_nonzero(p & g3)),
+            "io": int(np.count_nonzero(p & g & ~g3)),
+            "p3": int(np.count_nonzero(p & g3)),
+            "po": int(np.count_nonzero(p & ~g3)),
+            "G3": int(np.count_nonzero(g3)),
+            "Go": int(np.count_nonzero(g & ~g3))}
+
+
+def _wdice_from_counts(c: dict, lam: float) -> float:
+    num = 2.0 * (c["io"] + lam * c["i3"])
+    den = (c["po"] + lam * c["p3"]) + (c["Go"] + lam * c["G3"])
+    if den == 0:
+        return float("nan")
+    return float(num / den)
+
+
+def _recall_gt3(pred: np.ndarray, gt_labels: ArrayLike) -> float:
+    """Coverage of the GT class-3 (probable course) region by the binary Y prediction.
+    NaN when this case has no class-3 voxels; not replaced by 0/1 (V4-AM-C3W-01 §5)."""
+    c = _c3w_counts(pred, gt_labels)
+    return float(c["i3"] / c["G3"]) if c["G3"] else float("nan")
+
+
 def _hd95(pred: np.ndarray, gt: np.ndarray, spacing_zyx: Sequence[float]) -> float:
     """95th-percentile Hausdorff distance (mm).
 
@@ -433,6 +474,11 @@ def score_protocol(
     out["HD95_Y"] = _hd95(pY, gY, spacing_zyx)
     out["Empty_pred_Y"] = float((not pY.any()) and bool(gY.any()))
     out["ASSD_Y"] = _assd(pY, gY, spacing_zyx)
+    # V4-AM-C3W-01 (eval-only reference weighting; primary metrics unchanged)
+    c3w = _c3w_counts(pY, gt)
+    for lam in (0.25, 0.5, 0.75):
+        out[f"wDSC_Y_{lam:.2f}"] = _wdice_from_counts(c3w, lam)
+    out["Recall_GT3"] = float(c3w["i3"] / c3w["G3"]) if c3w["G3"] else float("nan")
     if secondary_pred is not None:
         sp = np.asarray(secondary_pred)
         out["Dice_123"] = _dice(mask_123(sp), mask_123(gt))

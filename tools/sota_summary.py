@@ -33,10 +33,11 @@ LABELS = {"nnunetv2": "nnU-Net v2 (3d_fullres, 300 epochs)", "nnunet": "DynUNet 
           "segresnet": "SegResNet", "attention_unet": "Attention U-Net", "unetr": "UNETR",
           "swin_unetr": "SwinUNETR", "nnformer": "nnFormer"}
 COLS = ["Dice_Y", "HD95_Y", "SurfDice_Y", "Dice_L", "Precision_L", "Recall_L", "L_over_Y",
-        "Recall_vis", "Dice_vis", "Dice_123", "Dice_c4"]
+        "Recall_vis", "Dice_vis", "Dice_123", "Dice_c4", "wDSC_Y_0.50", "Recall_GT3"]   # C3W secondaries (V4-AM-C3W-01)
 P_COLS = ["Dice_Y", "HD95_Y", "SurfDice_Y", "Dice_L", "Dice_vis"]
 # Columns a CSV must have to count as current; CSVs from an older eval version are re-scored.
-REQUIRED = set(COLS) | {"Lvis_over_Y", "Empty_pred_Y"}   # Empty_pred_Y: HD95 v2 (2026-10-24)
+REQUIRED = set(COLS) | {"Lvis_over_Y", "Empty_pred_Y", "wDSC_Y_0.50", "wDSC_Y_0.25",  # noqa
+               "wDSC_Y_0.75", "Recall_GT3"}   # v2 2026-10-24; C3W 2026-10-26
 
 
 def pred_dir(method):

@@ -35,7 +35,7 @@ import ablation_configs as ac  # noqa: E402
 OUT = Path(ac.RESULTS_ROOT) / "p0_binary_y_eval_v2"
 GT_CACHE = Path(ac.RESULTS_ROOT) / "preprocess_cache" / "sp_2.500_1.133_1.133"
 COLS = ["Dice_Y", "HD95_Y", "Dice_L", "Precision_L", "Recall_L", "L_over_Y",
-        "Dice_L_legacy", "Dice_123", "Dice_c4"]
+        "Dice_L_legacy", "Dice_123", "Dice_c4", "wDSC_Y_0.50", "Recall_GT3"]   # C3W secondaries
 COMMON_COLS = ["Dice_Y", "HD95_Y", "Dice_L", "Precision_L", "Recall_L", "Dice_L_legacy"]
 P_COLS = ["Dice_Y", "Dice_L"]
 # v0.4 endpoints (protocol v0.4-draft §6); tiers only for arms with a visibility head
@@ -43,7 +43,8 @@ V04_COLS = ["SurfDice_Y", "Recall_vis", "Dice_vis", "Lvis_over_Y",
             "Dice_tier1", "Dice_tier2", "Dice_tier3", "Dice_tier4"]
 V04_P_COLS = ["SurfDice_Y", "Dice_vis"]
 # Columns a CSV must have to count as current; older CSVs are re-scored.
-REQUIRED = set(COLS) | set(V04_COLS) | {"Dice_123_s1full", "Dice_c4_s1full", "Empty_pred_Y"}
+REQUIRED = set(COLS) | set(V04_COLS) | {"Dice_123_s1full", "Dice_c4_s1full", "Empty_pred_Y",
+                                        "wDSC_Y_0.50", "wDSC_Y_0.25", "wDSC_Y_0.75", "Recall_GT3"}
 
 
 def pred_dir(arm):
