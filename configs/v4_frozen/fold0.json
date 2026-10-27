@@ -1,0 +1,77 @@
+{
+ "fold": 0,
+ "chosen": "r1",
+ "chosen_config": {
+  "trainer": "nnUNetTrainerV4_R1"
+ },
+ "selected_at": "2026-10-27T08:43:15.618607",
+ "manifest": "configs/v4_dev/fold0_candidates.json",
+ "rule": "max mean Dice_Y on V_k; within tol -> smaller simplicity rank wins",
+ "tol": 0.003,
+ "candidates": [
+  {
+   "name": "r1",
+   "simple": 1,
+   "config": {
+    "trainer": "nnUNetTrainerV4_R1"
+   },
+   "csv": "results/v4_dev_preds/r1/fold0/eval.csv",
+   "n": 18,
+   "mean_dice_y": 0.6249536922753067,
+   "mean_hd95_y": 4.951318935357526,
+   "n_hd95_nan": 0
+  },
+  {
+   "name": "r1p_abc",
+   "simple": 3,
+   "config": {
+    "trainer": "nnUNetTrainerV4_Pabc",
+    "margin": 35
+   },
+   "csv": "results/v4_dev_preds/r1p_abc/fold0/eval.csv",
+   "n": 18,
+   "mean_dice_y": 0.6130223373566681,
+   "mean_hd95_y": 4.504027555262192,
+   "n_hd95_nan": 0
+  },
+  {
+   "name": "r1p_bc",
+   "simple": 2,
+   "config": {
+    "trainer": "nnUNetTrainerV4_Pbc",
+    "margin": 35
+   },
+   "csv": "results/v4_dev_preds/r1p_bc/fold0/eval.csv",
+   "n": 18,
+   "mean_dice_y": 0.6170548477023077,
+   "mean_hd95_y": 4.6336320034226794,
+   "n_hd95_nan": 0
+  },
+  {
+   "name": "r1p_ac",
+   "simple": 2,
+   "config": {
+    "trainer": "nnUNetTrainerV4_Pac",
+    "margin": 35
+   },
+   "csv": "results/v4_dev_preds/r1p_ac/fold0/eval.csv",
+   "n": 18,
+   "mean_dice_y": 0.6134358950112184,
+   "mean_hd95_y": 5.052292979899786,
+   "n_hd95_nan": 0
+  },
+  {
+   "name": "r1p_ab",
+   "simple": 2,
+   "config": {
+    "trainer": "nnUNetTrainerV4_Pab",
+    "margin": 35
+   },
+   "csv": "results/v4_dev_preds/r1p_ab/fold0/eval.csv",
+   "n": 18,
+   "mean_dice_y": 0.6239970803536763,
+   "mean_hd95_y": 4.732872202247904,
+   "n_hd95_nan": 0
+  }
+ ]
+}

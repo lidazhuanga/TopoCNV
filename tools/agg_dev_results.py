@@ -31,7 +31,7 @@ def mean(xs):
     xs = [x for x in xs if x is not None]
     return sum(xs) / len(xs) if xs else None
 
-runs = {r: load(r) for r in ["r0_dev", "r1", "r1p_abc", "r1p_bc"] if os.path.isdir(os.path.join(BASE, r))}
+runs = {r: load(r) for r in ["r0_dev", "r1", "r1p_abc", "r1p_bc", "r1p_ac", "r1p_ab"] if os.path.isdir(os.path.join(BASE, r))}
 
 print("=== per-fold means ===")
 print(f"{'run':10s} {'fold':7s} {'n':>3s} " + " ".join(f"{k:>12s}" for k in KEYS) + " empty")
@@ -50,7 +50,7 @@ for run, folds in per_run.items():
     print(f"{run:10s} ({len(folds)} folds) {cells}")
 
 print("\n=== paired deltas vs r0_dev (common cases per fold) ===")
-for run in ["r1", "r1p_abc", "r1p_bc"]:
+for run in ["r1", "r1p_abc", "r1p_bc", "r1p_ac", "r1p_ab"]:
     if run not in runs:
         continue
     for fd in sorted(runs[run]):
