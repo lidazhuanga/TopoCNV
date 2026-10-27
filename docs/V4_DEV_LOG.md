@@ -90,3 +90,12 @@
 - 注意：dev 层候选训练于 T_k−V_k（75% 数据），级联两端同时缺数据，代价或高于报告层（全 T_k）；报告层复跑将给出最终口径。
 - 运行态：abc_f3/f4、bc_f1 Ep299（收尾）；bc_f2 251、bc_f3 151、bc_f4 109、ac_f0 110、ac_f1 101；ab×5 + ac f2-4 排队。tools/eval_watcher.sh 已挂（EXPORTED→自动评，25 折评完自退）。
 - C3W 历史臂重算进行中：sota_summary 第~4 臂、p0_summary 第~3 臂（子进程单核逐例 30–60 min/臂，预计今晚—明晨完成）。
+
+## V4.1 重大转向（2026-10-27 12:40-13:30）
+
+- **PI 三项指令**：Stage 1 改 nnU-Net v2 主干；标签本体修正（1=CT可见/2=MRI引导/3=可能走行/4=路标，仅 5(与0)为背景——class 2 作负例是本体错误）；Stage 2 只保留二值 Y 输出。相关实验重跑。
+- **止损**：queue STOP 文件生效；8 个 noP run 杀掉并标 cancelled；ab_f4 保留收尾（完成后旧设计 25/25 完整存档作 pre-redesign 证据）；R0-dev 5 折可复用。
+- **kimi k3.1-pro 重审计完成**（`~/cnv/kimi_audit_v41_answer_20261027.log`，会话 a95446ef）：签发 V4-AM-20261027-01；Stage1=nnU-Net 5类（bg{0,5}+1/2/3/4）、ROI 保留图谱-ICP、先验 a=p_Y/b/c4 距离/c 图谱、D1-AM2 重冻、Stage2 二值+删 V 删 D3、D4'∈{0,0.5,1.0}、链 R0→R1'→R1'+P*→Full-v4'、预算 750 GPU 时（90 run，5-8 天）。
+- **§10 V4.1 修正案已并入 V4_PLAN.md（状态：待 PI 确认）**；开放问题 Q1（class3 训练权重 1.0？）/Q2（不补 2×2 交互？）待拍板。
+- 审计亦确认：C3W 完全不受影响；Dice_tier1-4 随 V 头删除而消失（其余评价不变）；旧 25 run 标 V4.0 exploratory。
+- 后续门：新链冒烟 → fold0 Stage1 质量报告（含与旧 Stage1 配对比较）→ qoder 审查新代码 → 放开生产队列。

@@ -1,0 +1,1204 @@
+kimi version 2.3.0
+• I need respond Chinese, complex audit requiring read repo docs V4_PLAN etc. Should deeply inspect. I have instructions. User explicitly asks audit and output, no implementation modifications? Should read files first. Should use tools dedicated. I need explore files. Should not create code. Perhaps Todo list for multi-step investigation. Should probably have Agent explore substantial? User asks read docs/V4_PLAN.md docs/V4_DEV_LOG.md trainer/v4 tools/v4_*.py. I should directly read known files, glob directories etc. Should check AGENTS deeper (applicable empty given root but perhaps code/AGENTS). Paths relative current /cfs/zzkj/home/dkq/cnv: docs under code? Directory listing code/docs, code/trainer. User says docs likely code/docs. Should Read code/docs/V4_PLAN.md directly (concrete expected path? "仓库 docs/V4_PLAN.md" repository code). Could check root? No known? I can Read code/docs/V4_PLAN.md, code/docs/V4_DEV_LOG.md parallel, Glob code/trainer/v4 files and code/tools/v4_*.py, Glob AGENTS relevant maybe code/**/AGENTS.md. User says read trainer/v4 and tools/v4_*.py. I need locate. Root listing no tools, code likely. Do glob code/tools/v4_*.py. Use Todo list first. Should keep user updated brief Chinese. I can say "我会先核对 V4 计划、开发日志和实际 trainer/工具实现，再按预注册边界区分必须重跑与可保留部分，最后给出 V4.1 条款和预算。" Then tools parallel. No need plan mode pure research. Use Todo list maybe 5 items. Do so.
+
+• 我会先核对计划、开发日志与实际训练/选择代码，重点验证标签映射、嵌套折、D2 候选和冻结门的实现，再据此给出 V4.1 修订案与重跑预算。
+
+• Paths perhaps writing/resubmission? Should locate via Glob pattern **/V4_PLAN.md etc root. No matches under code indicates perhaps hidden ignored? Directory listing says code docs but perhaps actual repo elsewhere writing. Use Glob root "**/V4_PLAN.md" and "**/v4_*.py", "**/trainer/v4/**/*" maybe root. Should have no ls recursive. Use Glob root for V4_DEV_LOG.md, V4 docs. Parallel.Now read actual files full. Docs perhaps 50-100k. Read parallel two docs max 500k; trainers text files all ~? User read all trainer/v4. Perhaps 15 files modest. Can use Read parallel all known .py excluding pycache. tools 10 files. Lots tools calls parallel fine, outputs huge. I should assess line counts? Read docs first and trainer maybe 13 files; max total context ~??? I have token 90k? available plenty but context likely 114k? I can delegate? Instructions say do not delegate understanding. Should read key files myself. Could use explore agent to audit independent e.g. resource/runs. But user explicitly "你先读 ... 后作答" I need read. Could read all via Read in batches. Since 25 files perhaps each few hundred lines total 10k ~150k chars. I have max output per call 100k. Should manage. Start docs, key stage1, nnUNet trainer, splits, priors, roi. Tools select config, build priors, qc, coverage, make configs, jobs, nnunet. Then secondary stage2 old MONAI maybe relevant historical but user explicitly entire trainer/v4. I can read remaining later. First parallel docs and 6 code.I got full docs. Should note dev log line3 stale nested statement says fold0/1 only despite plan per fold. Could audit mention fix. User wants V4.1 entire. Should read remaining trainer and tools. Could launch parallel Agent for independent resource estimate perhaps after files? But substantial analysis I can handle. Should have no delegation required. Tools can be 10 large files, need read. I'll get sizes via Read direct with max 500k for each perhaps tool output total huge. 10 files could ~3000 lines 150k chars. Fine. Trainer remaining 9 files total perhaps 800 lines. I can parallel batch 8? All tools independent. I should keep user update only when nontrivial "已确认 ...". I can state key discovery briefly. Should use Todo not yet done until all read.
+
+  Read trainer v4 __init__, common,data,engine,infer,losses,model,train_stage2 (legacy), nnunet/__init__. plus tools all. Could use Read for known file paths. I'll batch trainer remaining and perhaps tool selection & nnunet & build priors first.
+
+• 已确认一个关键点：Stage 2 的主任务确实已经是二值 Y（类别 1–4），5 个额外通道只是可见度辅助头；因此 V4.1 不是把多类主任务改成二值，而是删除辅助监督。旧 Stage 1 则明确把类别 2/3 排除在前景之外，必须连同其 ROI、先验和全部下游依赖重建。
+
+• Should read remaining tools: v4_jobs, queue, make_configs, qc_d1, roi_coverage, dev_summary, skeletons plus perhaps __init__ empty, nnunet init empty. User says tools/v4_*.py includes 10 read build,nnunet,select; remaining 7. Should have all. Also tests useful for D2防呆 current bug. Read manifests perhaps configs. Glob configs/v4*, tools agg? I should inspect v4_jobs to see candidate lists and actual run names.Now docs+trainer/tools read all. Should consider additional current results and protocol accident "D2选择时误把R1放进候选，已被代码审查发现、4折冻结文件作废" not in dev log (perhaps user facts newer). Should inspect configs candidate manifests/frozen logs for防呆 and actual completed runs status; user gives facts but can verify. Should locate config files. Glob code/topocnv_remote/configs/v4_* etc. Also actual results dev summary perhaps latest beyond log. I should not overdo but audit entire plan. Should know run counts and current stage 1 run time to estimate nnUNet Stage1. I can inspect nnUNet plans, installed version, old training logs durations. User asks patch/spacing/epoch budget and expected quality improvement and cost. I have baseline Stage2 spacing and patch 56x192x192, 300 epochs 3.2h. Stage1 could reuse same plans and 300 epochs. Stage1 output 5 classes bg+4 fg; perhaps 5 or? If class 5 and 0 both background, dataset label mapping must merge to 0 (nnUNet cannot have two labels same output? Can have labels {background:0, c5:5}? But then output 6 classes if not remap. I need specify physical remap to 0 background + 1,2,3,4. Use 5 output channels. If treating 5 background yes not ignore. Main binary Y stays 1-4. Stage1 loss weighted sampling. Should design scientifically.
+
+  Core decisions:
+
+  1. Stage1 nnU-Net v2 3d_fullres. Class set {1,2,3,4} as four foreground + merged background 0/5. Class3 no image evidence but user says "现 Stage1 only 1/4把2/3归背景是错" and specifically asks class3 weighting. Should include class3 as foreground supervised (even if inferred) perhaps maintain "class3 half-weight" spirit on training end? User says C3W only eval currently and user directive says class 2 evidence true nerve; class3 possible course no evidence, class5 background. Should distinguish. For Stage1 multi-class, training on class3 could teach hallucinate anatomy, but ROI/priors use? Stage1 objective now assist recognition localization all nerve evidence tiers. Could set CE voxel weights: class1/2/4=1, class3=0.5? Dice class weights perhaps class3=0.5? However "是否沿用'类别3半权'精神于训练端或维持不动" ambiguous: "维持不动" perhaps maintain C3W only evaluation (training not changed) vs now class3 needs foreground. I need propose. Must not smuggle C3W eval weights into training unless explicit user. Since current C3W pre-reg says only eval no training changes. User directive requires labels mapping changes but not necessarily class3 half training. I can recommend include class3 full as separate class, no half weight initially to avoid extra tuning; C3W remains eval only. But class3 no image evidence makes full Dice loss training questionable, yet label prior possible course useful to localize. Could use half weight on class3 in CE only? Should choose and explain. User wants V4.1 spec recommendation. I can propose a fixed, not tuned, asymmetric training weighting to reflect evidence: class1/2/4 weight1, class3 0.5. But that would explicitly change C3W "只改评价不改训练" and user asked whether to extend. Should decide whether recommend and list open question? User wants minimal open issues; can make recommendation default and only ask PI if disagrees? I'll output open questions needs拍板. I can list O1 class3 training weight? But user explicitly requests my suggestion, I should give recommendation not offload all. Could say "建议 V4.1 主方案不在训练端引入 0.5：class 3 作为独立前景全量监督；C3W 的 0.5 仍是评价端证据权重，二者 estimand 不同。不要把 Dice_tier 优化与主 Dice_Y 混在一起。若担心无影像证据导致 hallucination，可先把 class3 half-weight 作为预设敏感性，而非开发维；但这增加 run 数，默认不开。" That is conservative, maintains prereg C3W and reduces run. However class3 full training might directly contradict no evidence concern. Alternative use only CE for class3? Should think.
+
+  Stage1 purpose in V4 was landmarks c1/c4 for ROI and c4 prior; now new directive label ontology demands all nerves. They may expect class3 half-weight perhaps "现 stage1只学1/4把2/3归背景错" means must learn class3 too. If full loss, okay. "class3无影像证据" suggests perhaps half weight appropriate. They ask "损失加权/采样怎么定？是否沿用'类别3半权'精神于训练端或维持不动" Could recommend: foreground all, CE weights class1=class2=class4=1, class3=0.5; Dice equally? If half only CE and Dice full, effect not exactly half. Could set both CE and Dice class3 0.5, bg perhaps standard. nnUNet DC_and_CE supports weight_ce? It has weight_ce global, weight_dice global, not per-class CE weight unless custom. Should not have code now but spec. Standard nnUNet stock DC_and_CE with 5 classes no class-specific CE weights; class imbalance addressed oversampling and Dice. To implement class weights custom trainer needed, against "以nnU-Net v2为主干" still custom trainer fine. But adding hyperparam unvalidated risky. Better standard DC_and_CE + oversampling all foreground labels? Standard nnUNet samples foreground classes according to class_locations (perhaps random among labels) can oversample class5 if included, but remap 5 to bg avoids. Four classes all included, default nnUNet class sampling likely choose random class and voxel? Should inspect installed nnUNet data loader to be precise? Tools perhaps environment. User asks sampling. I can say use nnU-Net default 3d_fullres oversample_foreground_percent=0.33; allowed foreground labels {1,2,3,4}, 0/5 not sampling targets. No extra class-balanced resampling initially. But rare class2/4 could still need. Standard get_bbox likely randomly selects class based on locations not sure. Should read installed library? Could inspect env source using Grep/Read known path? Should locate using Grep pattern "def get_bbox" path envs/nnunetv2_cnv/lib perhaps Glob. But not essential, code currently YSampling merges all classes for Stage2. For Stage1 could preserve standard per-class oversampling, unlike binary. Should understand default probabilities. Standard nnUNetDataLoader3D.get_bbox: if force_fg: class_idx = np.random.choice(list(class_locations.keys())) then ...; so each class with voxels equal probability perhaps. This could oversample class3 etc. Since class5 merged bg not in class_locations? class_locations generated only foreground labels per label_manager (all_labels perhaps ignore background); if labels dataset 0-4 after remap, yes. Standard nnUNet foreground sampling equal across classes perhaps. Should specify verify actual version; fixed at default 33% forced foreground and standard class-balanced selection across 1–4. Could set explicit sampling probabilities to avoid class3 dominance? User asks loss weighting sampling. I can recommend use standard nnU-Net oversampling and class uniform selection? Should derive default. I'll inspect environment to ground.
+
+  Also class2 MRI visible partially CT; Stage1 supervised on CT with MRI-derived labels may learn anatomy prior. Risk of MR-specific bias? Since input CT only, cannot learn MR-specific features directly; but labels reflect information not available on CT, so irreducible uncertainty, possible overfit site/scanner/patient selection correlated with MRI quality. The fact all 154 have registered MRI? Data range 157 MRI, 154 labels, class2 based on MRI all? MRI registration 115/153 perhaps current additional new? User says line另有115/153 completed. Should not make new input. I should say CT-only Stage1 can learn CT-visible correlates and population anatomy, not MR signal; class2 may produce low-confidence/diffuse predictions and falsely appear CT visible; evaluate calibration and stratify by CT visibility? Should avoid using GT visibility unavailable inference. Audit using inner-OOF class1/2 separately, false positives on CT-only etc. Adding MRI channel would change target population to MRI-available and inputs, co-registration errors, not requested; default no, prespecify future ablation/external. 115/153 incomplete and potentially selection bias, not use as extra channel. Since data scope says all154 MRI? "MRI→CT 配准线另有 115/153例已完成" perhaps 115 of 153 usable in current process; adding would restrict or missing masks. Default no.
+
+  ROI choices: atlas-ICP using improved c4 vs direct new Stage1 nerve probability support. Should recommend keep atlas-ICP as primary. Why: current failure mostly stage1 quality but atlas ROI achieves high coverage despite poor Dice; direct probability support bounding boxes vulnerable to outlier FP, threshold choice, class2/3 uncertain diffuse, low recall tail; would require retune threshold and margins, potentially bigger ROI and additional hyperparams. Since c4 bony landmarks stable, more precise new c4 improves ICP; keep ROI atlas support >0.02 and m rule; perhaps Stage1 neural probabilities can be used as QC/fallback or future ablation not main. Direct ROI not equivalent and would add D1 design dimension. Now regenerate c4 from new 5-class softmax. Class 5 background included in p0=bg+p5? If remapped bg, p4 direct. Landmark mask now for c1+c4 only for ICP? ROI atlas placement still c4; for c4 clean mask use argmax across 5 outputs, is4. Could keep class1 union for cleanup z range? Current landmark_mask_from_probs p1,p4. New probabilities p1,p2,p3,p4; for ROI c4 points only needed, cleanup based on landmarks c1∪c4. If class2/3 now predicted, argmax background for those? For landmark union c1/c4 should determine c1/c4 when their probability exceeds all other classes including c2,c3,bg, not old p0=1-p1-p4. Or could threshold p4 independent and p1? Spec explicit "same class definitions for landmark tasks: c1/c4 still landmarks; c2/3 not used as c4." Do not let p_nerve contaminate ICP. Use 5-way argmax; select voxels whose winning class in {1,4} for landmark mask and ==4 for c4. Or use probability thresholds? preserve original argmax semantics. Direct new Stage1 p_nerve prior a = p1+p2+p3+p4 (since mutually exclusive softmax; background includes 0/5) not p4. b = distance to c4 (unchanged 30mm). c population Y atlas unchanged except new predicted c4 transforms and recalibrated leave-one-out atlas. But note c atlas Y includes 1-4 already. Must rebuild not because formula c changes but Stage1 and training folds new; old c uses old ICP. Could keep definition c same, recalc. Priors ROI storage box margin 35 perhaps if new m set same {15,25,35}; keep. D1-AM1 old m/D invalid, archive write-once not overwrite, new version e.g. V4.1-AM1 / D1-AM2? User says V4.1 amendments and old freeze invalid re-freeze. Could call D1-AM1-v4.1 or D1-AM2; must avoid overwriting old files. They want new §. Use `D1-AM2 (V4.1)` to clearly version; old `configs/v4_qc/fold{k}.json` archived, new `configs/v4_1_qc/`. Rule same: m∈{15,25,35}, min coverage≥99% on dev T_k−V_k inner OOF non-fallback atlas ROI; infeasible m35. D thresholds based new c4 same Q1−3IQR Q3+3IQR; own-side ICP, structural checks. Freeze per fold before Stage2. Recalculate coverage class-wise perhaps Y overall plus c1/2/3/4 and c3 weighted? Primary m selection remains Y coverage. Make sure class2/3 now included Y always old already Y. But direct p_nerve not ROI. Include class-specific coverage as safety audit not selection to prevent class2 missing. Perhaps user expects coverage recalc with all foreground yes Y already includes 1-4, so note Y definition unchanged, but new Stage1 predictions alter ROI. C3W not used in m selection. Report coverage overall and per-tier descriptive. D1 margin selection uses GT of training cases allowed; no V_k? Old rule says m only training 105 not V_k. Plan §6 earlier says training+V_k coverage but AM1 updated only training, keep AM1. Should be precise.
+
+  Nested structure: preserve outer5, V_k 15%, inner3, dev/report two tiers and V_k ensemble. Stage1 nnUNet must have internal validation for training? They use last epoch, no model selection. For each inner model train on pool minus inner fold, validate on inner fold for export; for held-out V_k/report ensemble all3. Exactly current. Make sure at report tier T_k includes V_k; no selection. Keep. Stage1 patch/spacing/epoch: Could use same source cache spacing 2.5×1.1328×1.1328, no resampling; `nnUNetPlans` copied/adapted Dataset501? For Stage1 plans should be independently generated by nnUNetv2_plan_and_preprocess on new dataset (not blindly copy Stage2 plans) because crop shapes same and channel one but output labels different. Since image data identical full-volume, Dataset501 plans likely same patch 56×192×192. Using automatically generated plans from stage1 dataset might produce same. User asks spec: recommend full volume fixed spacing as current cache and baseline, 3d_fullres patch 56×192×192 (nnUNet-generated for new dataset, expected identical; freeze actual plans after verify). batch2, 300 epochs, final checkpoint, default SGD + poly LR etc same nnUNet v2. Do not keep old128³/150. Does nnUNet standard 1000 epochs vs custom300? Baseline uses300. For comparability and resource,300. Stage1 potentially benefits1000? Not needed; fixed 300 to avoid extra dimension. User might expect 300 or1000 standard nnUNet v2. "nnU-Net v2 3d_fullres" default1000 but existing SOTA uses300 custom. Stage1 can use300 to match accepted backbone; quality uncertain. Should specify exact trainer `nnUNetTrainer_300epochs` with stock DA and last checkpoint. Use one input CT `NoNormalization`. Output5 classes. Patch same `56×192×192` as verified nnUNet baseline. spacing no resample. Perhaps new Stage1 patch 128³ impossible with anisotropy; use baseline patch better. Should mention actual patch in zyx. Epoch budget 300 x30 runs = Stage1 training ~? Each Stage2 run 3.2h on full dataset123. Stage1 inner dev trains70 cases vs stage2 dev105; report inner trains82 vs report stage2123; full-volume inference vs ROI. Stage1 training per iteration same input one channel, output5 vs stage24 input output7. Cost similar or less. Each epoch38s measured on Dataset501 training? 123 cases perhaps250 iterations? nnUNet default num_iterations_per_epoch250, so epoch independent dataset size. 38s =>300=3.17h. Stage1 whole-volume full-size training with same patch and batch2 same cost roughly3.2h. 30*3.2=96h not old10+6=16. Inference additional: full volume all cases, old stage1 40 min including training? Old 150 epoch128³ perhaps smaller number iterations one pass per dataset per epoch, not comparable. nnUNet 250 iterations/epoch fixed, 300=75k iterations. So Stage1 new cost90-110 GPU h including ensemble inference, perhaps need measured first run. I need estimate run table with ranges and total.
+
+  Stage2 run counts redesign. Should deeply design candidate set & ablation chain and report arms.
+
+  Old dev per fold: R0-dev ref (not select), R1-dev ref (not select), D2 4 priors {abc,bc,ac,ab}, D3+D4 4 combos class5{bg,ign}×S{0.5,1}, chain R1+P+V noS 1. Total11 per fold (R0 1+R1 1+4+4+1=11). All55, R0 done. User says D2 candidate20/25 and ab_f4 finishing, which includes R1×5 +D2×20=25, so old D3/D4 none. Fine.
+
+  New Stage2 no V; D3 gone. D4 S weights {0,0.5,1} and priors {none,best}. I need avoid selection bias and preserve chain closure. Should candidate design precise:
+  - References R0-dev (reusable), R1'-dev (new, not eligible)
+  - D2' prior combination candidates perhaps all 7 nonempty subsets or old4? User says D2' candidates all rerun. Could keep {abc,bc,ac,ab} 4 to control budget, but if a redefined to p_nerve, single a/b/c effects changed; old set lacked singles. User asks new dev维 selection set suggestion e.g. S{0,0.5,1}×P{无，最优组合}. Should define best P selection. D2' four combos + R1' reference? If D2 selection needs no-prior baseline for tie simplicity? Old R1 not candidate to avoid accident but then D2 only among priors, even if all worse than R1 still forced to use priors in full chain. Old plan says D2 four combos, R1 only ref. Main Full includes P by definition, but if no benefit, tie rule can't choose no P. New design might allow no-prior as "none" but then protocol accident warns R1 mistaken included D2 and plan says R1 only ref. Should respect: R1 remains reference not D2 candidate. User asks new development dimensions {S0,0.5,1}×prior{none,best combo}; perhaps no-prior variants are chain references, not candidate? I need carefully construct statistically sound ablation chain with R0→R1'→R1'+P→R1'+P+S. Full-v4' = R1'+P+S (V removed). To select P and S without R1 candidate contamination:
+  - D1 m freeze no training.
+  - D2' select P from {abc,bc,ac,ab}, all with S=0, relative to each other only. R1' is reference and excluded. This maintains old rules.
+  - D4' select skeleton weight w from {0,0.5,1.0}? If w=0 with P is exactly R1'+P (chain closure), so can include `P+S0` as eligible D4 candidate? This lets S=0 chosen ( skeleton dropped), good. It doubles as chain closure no extra. Should have R1'+P (S0) already trained as D2 selected combo (one of four). Reuse its metrics, no extra run. D4 new S0.5 and S1 with same selected P (2 per fold) plus selected P S0 from D2 = 3 candidate configs. Then selection across all D2 and D4? Could be two-stage sequential selection:
+  1. D2 choose P* among four by Dice tolerance simplicity (predefine ranks). R1 excluded.
+  2. D4 choose w∈{0,0.5,1} for fixed P*, candidate P*S0 (already D2), P*S0.5, P*S1. w0 simplicity best if within0.003 of best, so skeleton only kept if >0.003 gain over no S or higher enough? Strict within tol rule: best perhaps S0.5 +0.002; S0 wins simplicity. Good.
+  Full frozen config = R1'+P*+S w*. If w0, Full-v4' equals R1'+P, skeleton absent per fold. Full-P and shuffled controls still meaningful only if P nonempty; D2 always nonempty. Good.
+  Chain R0→R1'→R1'+P→R1'+P+S has direct per-fold data: R1' ref; P* from D2; P*S0.5/1 from D4; selected full. No separate chain run needed. Old R1+P+V removed, so save5 runs. But what about no-prior+S arm to isolate skeleton effect vs R1'? Main chain adds S after P so okay; report Full-v4'−P = R1'+S (with same w) isolates P under full config and allows S effect without P. Dev user suggests {none,best}×S to close 2×2, perhaps requires extra `R1'+S` candidates for none P. The report already includes Full−P. Development chain perhaps user wants development candidates S weights×prior none/best. Should decide run counts.
+
+  Option new dev per fold:
+  - R0-dev reference reusable 1
+  - R1' reference 1
+  - D2' P combos 4 (S0)
+  - D4' on P*: S0.5,S1 (S0 reuses P*) 2 new
+  - "链闭合" perhaps no-prior skeleton R1'+S at chosen w? This is Full−P and not needed to select but useful dev chain, 1 new if w>0. Old chain R1+P+V was to close R1→R1+P→R1+P+V→Full. New without V, D2 selected P* is exactly R1'+P, D4 candidates are full, so chain closed already. No extra. Total new GPU runs per fold=1 R1+4D2+2D4=7, all folds35; plus R0 5 reused. 35 vs old remaining? Old 55 with 45 complete; new all stage1 dependent 35 rerun. Report30 unchanged. Stage130 new. Total new95 GPU runs (30+35+30). Is that what user expects? They mention "Stage1 nnUNet 15 + 先验重建 + D2'候选 + D4' + 链闭合" only Stage1 nnUNet15 perhaps they refer dev15, plus report15? In facts old Stage1 dev15 complete and report fold0/1 etc? User says "其余 Stage-1 依赖的全部重跑（Stage1 nnUNet 15 + 先验重建 + D2' 候选 + D4' + 链闭合）" perhaps asks run list with Stage1 nnUNet15 only? Wait original V4 Stage1 dev15 + report9 remaining, but now old report f0/1 had6 and f2-4 9 perhaps already completed due queue advanced. All old Stage1 invalid. V4.1 requires 30 Stage1 runs (dev15 +report15), not15. They parenthetically says "Stage1 nnUNet 15" perhaps perhaps expecting only development Stage1 15 new, report later 15? Should clearly count both, emphasize cannot only rerun15 unless report not included. Report30 Stage2 not started old; needs run after. So total95 new GPU runs +5 R0 reused +5 R0 report reused. If include S0/chain perhaps +5 etc.
+
+  Alternative dev full factorial prior{none,P*}×S{0,0.5,1}: P* S0 from D2; noneS0=R1 reference; noneS0.5/1 two extra; P*S0.5/1 two extra =>4 D4 runs per fold, dev total1+4+4=9/fold=45 new, +5 R0 reused =50. Chain closure? This provides full 2x2 and selection can choose Full among four but D4 noP variants perhaps reference or candidates? If D4 selection includes all four, it could select no P, contradict Full includes P and D2 selection. Could restrict Full candidates P* only; noP S arms references for isolated effects. Then not essential, extra20 runs. User's example "新的开发维选择集建议（如 骨架权重{0,0.5,1.0}×先验{无,最优组合}？）" explicitly raises full factorial. I should evaluate and perhaps recommend a lean design with P* only to reduce runs or full factorial for attribution. They ask chain R0→R1'→R1'+P→R1'+P+S? likely lean sequential. I can propose main candidates D4 w {0,.5,1} on P*; optional noP S arms as report Full-P existing, not dev. Report Full-P supplies final attribution; no need dev full factorial. This reduces20 runs and avoids extra selection complexity. Could include report Full-P ensures noP+S. D4 w0 reuse P*; no new. If w=0 then report Full and R1+P identical; do I still run duplicate report arms? Should avoid duplicate runs by symlink/reuse predictions when frozen configs identical. But per fold w may differ. Report six arms:
+  R1 (noP S0)
+  R1+P (P* S0)
+  Full-v4' (P* S w*)
+  Full-v4'−P (noP S w*)
+  Full+shuffledP (shuffledP S w*)
+  and old R1+P+V removed, so report now5 arms not6! Old report list 6: R1,R1+P,R1+P+V,Full,Full-P,Full+shuffle. With V removed, R1+P+V is identical to R1+P (V removed S0). So eliminate duplicate. V4.1 report arms = 5×5=25 max, not30. Good catch. If w*=0, Full==R1+P, Full−P==R1, Full+shuffle = R1+shuffledP? distinct. Could reuse within fold to avoid redundant training. But pre-reg could still run duplicate seeds? No repeated seed decision. Better deduplicate identical configurations by train once and link/export same predictions, declare deterministic reuse not independent arm. Max25, possibly fewer. But user might expect 30 report unchanged? Should propose accurately. V4.1 Stage2 V gone, chain length one shorter so report5 arms. Main comparison Full-v4' vsR0 unchanged. Secondary ablations four? R1,R1+P,Full-P,Full+shuffle plus perhaps R1+P duplicates Full when w0. Should have Holm family accordingly predefine.
+
+  Development D2 selected P* S0 already chain closure. Dev candidate count:
+  R0 ref 5 reusable.
+  R1' ref5 new.
+  D2' 4×5=20 new.
+  D4' 2×5=10 new if w0 included via D2 selected; no chain separate.
+  Total35 new.
+  Stage1 30 new.
+  Report25 max new.
+  Total90 new GPU runs (30+35+25). Old user "链闭合" perhaps wants +5? I can say chain closure0 extra because reuse exact configuration; if insist independent noP+S dev for 2x2 then+10 or +? I'll compute full factorial noP/P* ×S0,.5,1: baseline noPS0=R1 (new already), P*S0=D2 winner (already), four nonzeroS combos =4/fold20; versus lean2/fold10. Additional noP S0.5,S1 =10, not20. I earlier counted D4 total4 vs lean2 so+2/fold=10, dev45 vs35? Lean new per fold R1 1+D2 4+D4 2=7 =>35; full new per fold1+4+4=9 =>45, yes+10. Good. Report25. Full design total100 vs lean90. Old R1+P+V chain eliminated saves5 and report5 vs old. Old overall with all Stage1 30 and dev50? Original dev excludingR0=50 (R1 5+D2 20+D3D4 20+chain5=50) +report30+stage130=110; new90. Original plan table said109 due Stage1 report only9 and dev new53 etc but completed reuse. V4.1 from now all stage1 invalid, R0dev5 reusable, R0 report5 reusable. New runs90.
+
+  But Stage1 labels new and Stage2 binary labels now explicit0/1 vs original0-5. Stage2 data sets can store binaryY directly rather than original0-5. If no V, class5→0 and classes1-4→1. Better prep remap labels to binary and use stock label manager. Stage2 input channels CT + priors. Network output2 exactly, no `_NOutLabelManager`, no vis export. This removes code complexity and ensures class5 background. Skeleton transform sees binary target. Sampling standard binaryY (could remove custom YSampling or keep equivalent). D3 irrelevant. Evaluation no Dice_tier because no multi-class outputs; main DiceY/HDSurf etc C3W computable from binary predictions and original multiclass GT. Recall_GT3 computable. Should paper impact: lose per-tier Dice_tier1..4 as model output diagnostic, not primary endpoint. Since main task binary Y, tier Dice from auxiliary head was secondary/mechanistic and not necessary for primary claims. But user directive class1 vs2 vs3 vs4 ontology may make per-tier evaluation important to show new Stage1 learns classes and errors. I can retain/expand per-class evaluation at Stage1 where multiclass predictions exist (Dice_c1,c2,c3,c4 on dev OOF, perhaps report Stage1 heldout ensemble). Stage2 binary cannot produce per-tier Dice without auxiliary head; cannot claim per-class segmentation. Can compute class-specific recall/precision of binary predictions against each GT tier (Recall_GT1/2/3/4), wDSC and RecallGT3 unaffected; FP cannot be tier assigned. Dice per class cannot be derived from binary Y? Actually binary P and GT class c allows binary Dice_c =2|P∩GT_c|/(|P|+|GT_c|), but denominator includes all predictedY, so not same as multiclass per-tier Dice and conflates other tiers. Do not call Dice_tier. Can compute Recall_GTc exactly, perhaps "class-tier recall" adds1/2/4 to complement RecallGT3; pre-specify before seeing new results. Should consider adding new evaluation metrics after seeing old results? New amendment before new runs okay. But avoid metric proliferation. For paper, explicitly remove auxiliary visibility/tier Dice analyses, retain binary primary+secondary and C3W; add Stage1 per-class OOF diagnostics as segmentation quality validation not Stage2 output. This addresses reviewer. Stage1 per-class metrics can be computed inner-OOF on dev training and V_k; report tier heldout ensemble predictions on report fold (but report Stage1 models trained on T_k so legit OOF outer) after frozen. Avoid using report metrics to tune. Class3 Dice expected low due uncertain definition; report macro case perhaps classes absent? Should define absent handling. Not central but could specify per-class Dice/Recall and calibration.
+
+  C3W unaffected confirmation: uses original GT0-5 and binary prediction P; wλ for GT3 only, background and class5 weight1, FP never downweighted. Stage2 prep label binarization does not alter evaluation GT cache original labels. Evaluation must keep reading original0-5, not binarized Stage2 labelsTr. `eval_protocol_metrics.py` uses CACHE_DIR original so okay. wDSC and RecallGT3 remain exactly same; no reliance on vis. `Dice_tier` did rely on vis files and disappears. HD95 empty penalty unchanged. Selection uses DiceY not wDSC; C3W no role D1/D2/D4 or model selection.
+
+  Stage1 expected quality improvement: cannot promise numeric. Old c1.35 c4.47. Switching to nnUNet and including labels may improve c1/c4 but adding c2/c3 makes task harder and could reduce c4. Should predict range? User asks "预期质量提升幅度与验证方式". Should provide realistic planning hypothesis not guarantee: c4 Dice target≥0.55–0.65 vs0.47 (+0.08–0.18), c1 target≥0.45–0.55 vs0.35 (+0.10–0.20), predicted volume bias closer 60% to80–120%, z-length median deficit 55→<20–30mm. Are these justified? Could be overprecise. Better state "不预注册保证数值；以 fold0 old inner OOF baseline paired compare, go/no-go minimum c4 Dice≥0.55 and no degradation of ROI coverage; planning expectation +0.05–0.15 for c1/c4, not Stage2 Dice." But expected quality "幅度" wants estimate. I can explicitly say evidence only backbone Stage2 +0.023 Dice (0.6579 vs DynUNet0.636) and can't transfer to Stage1; reasonable planning range c4 Dice +0.05–0.15 (0.52–0.62), c1 +0.05–0.15 (0.40–0.50), not guaranteed. Is that too pessimistic/optimistic? nnUNet often improves significantly due300ep and DA. Could target c4 0.55-0.65. Should not fabricate. I should avoid arbitrary numbers, say "没有可支持的可靠点估计；为预算/验收可设工作预期 +0.05~0.15 Dice，而非结论；若 fold0 c4 <0.47+0.03 and coverage no better, do not assume backbone fixes all, review but no tuning on V/report." Yet user asks expected quality. I can respond with hypothesis range and validation. Should be clear not evidence. Use old fold0 metrics only, paired same inner OOF cases. But new stage1 training set split same, new nnUNet training on same cases, so compare old/new predictions on T0−V0 inner OOF 105 and V0 ensemble18. Old models training recipe differs label set; direct compare per class c1/c4. Must ensure old fold0 inner OOF predictions available and model; yes facts. Use fold0 pilot first (3dev runs) to validate before remaining12. But sequential pilot using fold0 results to adjust recipe could bias per-fold selection? Stage1 backbone/label set fixed by PI. Pilot should be smoke/quality gate not tune hyperparams based on V0. If poor, protocol amendment needed; no iterative hyperparam searching on same V_k. Can validate training coverage on105 innerOOF and V0 only descriptive. For expected improvement, use all5 dev innerOOF for final Stage1 diagnostics, report outer only once. D1 selection uses training coverage. Should not introduce go/no-go based on Dice threshold unless pre-specified and user decides; better no numeric go/no-go beyond technical gates. Pilot verifies throughput and outputs, not select recipe. Quality assessment after all dev stage1.
+
+  Could use SOTA baseline improvement to estimate resource not quality. State "可辩护的预期是方向性改善，不足以承诺 Stage2 +x；把 +0.05~0.10 c1/c4 Dice 当工作假设，上限不确定。验证以 paired per-case Dice c1/c4, c2/c3 absolute, volume ratio,z extent, ICP RMSE,own-side success,D fallback,ROI coverage." Perhaps include c4 primary because ROI depends on c4. Pre-specify stage1 success criteria: primary ROI coverage min≥99% if feasible and reduced fallbacks; secondary c4 Dice. But not require improvement to proceed user mandated.
+
+  D2防呆： Current `v4_select_config.py` blindly accepts arbitrary manifest candidates; doesn't have allowed roles, dependencies, expected set, duplicate config, D2 selected P etc. It selects all candidates in manifest globally (R1 accidentally included). Should have V4.1 specify separate manifests per dimension and explicit `role` field:
+  - `reference`: r0_dev,r1p? R0/R1 not selectable.
+  - `d2_prior`: exact four names (abc,bc,ac,ab), S=0,V=false, same m_k, only prior differs.
+  - `d4_skeleton`: exact three configs P=P*,S∈{0,.5,1}, V=false; w0 must point to same run/metrics as chosen D2 P*S0, no duplicate training.
+  - `chain` references not eligible? chain is actual selected D2 and D4, no separate.
+  Selector called twice `select --step d2` and `--step d4`; D2 freeze output P*, then D4 manifest generated programmatically from D2 frozen hash; no hand editing. Hard validate candidates exact expected set (no missing/no extra), allowed trainer names, m from D1-AM2, V=0, label version, Stage1 version hash, split hash, prior hash; R0/R1 rejected in any selectable manifest; metrics complete exact V_k and no duplicates. Global final freeze not simple min over all table; final composed from D2,D4 step winners. Tie simplicity predefine:
+  D2 simpler rank? Should rank combination by number channels descending? Simplicity fewer priors simpler: {ab,ac,bc} rank1 (2 channels) vs {abc} rank2 (3 channels). Among equal number channels, if within tol choose highest Dice (current tie min simple,-dice) deterministic. Could preassign fixed order to break exact tie? Current chooses -dice, exact tie manifest order? Python min preserves order. Should specify deterministic lexical tie or fixed priority. For D2 no "none" candidate. D4 S0 rank0,S0.5 rank1,S1 rank2; all same architecture except loss, simplicity no skeleton simplest and lower weight perhaps simpler. Within0.003 strict.
+  - R0/R1 used only paired reference comparisons, cannot win config.
+  - Report trainer gate derives allowed exact arms from frozen config not arbitrary `trainers` list. Current `gate_report` accepts any among list, could perhaps run. Should have new artifact schema version and invalidation of old4 folds, fifth not created? User says4 freeze void. Archive all old freeze artifacts regardless, selector refuses V4.0 manifests.
+  - Hash/write once and audit logs.
+
+  Old 25 D2 run data (R1 5+prior20) paper/appendix: Do not include in confirmatory main table or mix with V4.1. They are based on incorrect label ontology Stage1 (c2/c3 background) and invalid freeze (R1 candidate accident) so cannot be used as evidence for V4.1 effectiveness or to select new config. Can retain as "pre-redesign development evidence" in internal dev log; optionally appendix as "V4.0 exploratory/obsolete sensitivity analysis" with clear obsolete labels and no confirmatory claim. Does User want whether进论文/附录？ Recommend not main paper; perhaps brief design-rationale paragraph: initial DynUNet cascade underperformed (R0dev0.6566,R1 0.6411, priors0.636–0.638), motivated redesign. But using these numbers in paper could be relevant as development history; however User says "旧设计25个D2 run数据是否留作重设计前证据进论文/附录" respond yes optional appendix, not confirmatory; do not use for tuning V4.1 or claim superiority. Should not suppress unfavorable results; transparency. Include stage1 old quality, R1 cascade performance and priors not helping as rationale for backbone/ontology revision. But revised V4.1 directives from PI not entirely data-driven, and using old dev to design new is exposure; must disclose iterative design on same154, nested CV cannot erase. If old25 includes all folds V_k, design exposure across all outer folds. Already backbone SOTA exposure; now more design exposure. Add limitation: V4.1 redesign motivated by all5 dev V_k results and PI label ontology, so outer report folds remain untouched for new design? V_k overlap T_k not report fold k but each case appears as report fold in one outer and V in others? Cross-fold dependencies. Nested CV per fold uses V_k only within T_k, but global redesign using all V_0..4 leaks into each outer? Should analyze. Old plan allowed per-fold selection to avoid global. Now global V4.1 design uses aggregate old V results across all folds. For outer fold k, V_j for j≠k can include report fold k cases? I'll see report fold k is held out from T_k, but for j≠k, those cases are in T_j and may appear in V_j or training. Old dev results all V_j may include cases from report fold k in training for j≠k (likely in T_j−V_j). Any global design based on all folds' dev results potentially exposes outer test cases indirectly through other folds' training and V sets. They already disclose SOTA full OOF design exposure. New directive PI plus stage1 fold0 OOF quality and all old dev results. Should strengthen limitation and do not call confirmatory unbiased; "nested internal selection preserved, but redesign is dataset-level adaptive; 154 OOF remains internal validation, external confirmation required." User asks preserve stats/data etc. I should mention this risk under protocol.
+
+  Could old R0-dev 5 still reusable after Stage2 binary label prep change? R0 uses Dataset501 binaryY with 0/1. Yes exactly main task, no Stage1, no vis, no priors, 300ep plans same. Data scope/splits unchanged. Main R0 report SOTA5 OOF also reusable. R0-dev results metrics need C3W recalc already done. Reuse predictions and training, not rerun. Should validate hashes and exact case sets. R0-dev 0.6566 reference remains. R0 report0.6579/5.00. P0 historical not main. Stage2 R1' etc uses binary labelsTr instead of raw0-5 with main transform; mathematically main Y loss same? In old main loss class5->0 and1-4->1, yes. Removing V changes only aux. So R0 still exact. Skeleton uses same Y.
+
+  Run resource estimate more detail:
+  - Stage1 dev15 +report15 =30. Each perhaps3.2–4.0 GPUh training + inference? Baseline stage2 300 epoch3.2h. Stage1 full volume same network one input vs4 and5 output vs2/7. 250 iterations/epoch fixed, patch same. 3.2h training likely. Inference ensemble all cases:
+  For each outer/tier, each inner model predicts its inner fold (~35 dev,41 report) + holdout V_k18 or report31. So per run ~53-72 full volumes sliding window, across3 = each training pool predicted once plus holdout thrice. Per outer dev 105+3*18=159 full case predictions; report123+3*31=216. 5 =>1875 full-volume inference. Inference could be significant. Old Stage1 runtime40min included one pass per epoch150 not comparable, but full vol predictions each perhaps10-20s? patch56x192x192 step0.5 with mirroring? Stage1 nnUNet validation perhaps mirroring true by default, full volumes. Could be 1min/case, adding30h. Should estimate. I can include inference in3.5–4.5h/run? Baseline stage2 3.5–4h including ROI inference. Stage1 full-volume 5-class ensemble inference may be0.5–1h/run. So budget4h each =>120h. Range96–135. Use measured first3 to recalibrate without changing design.
+  - Stage2 dev35 at3.5–4h=122.5–140 (ROI smaller means actual2h? Log first wave said ~2h/batch perhaps each2h due cropped ROI; plan3.5–4 conservative).
+  - Report25 at3.5–4=87.5–100.
+  Total GPU=Stage1 105–135 +dev122–140 +report88–100 =315–375h. Add10–15% failed/smoke? Smoke separate1-2h. Budget330–420 perhaps. Should align original ~350. New90 runs vs old? Stage1 expensive increases. Could state central estimate: Stage130×3.5=105; dev35×3.5=122.5; report25×3.5=87.5; total315 GPUh, +10% inference/contingency=~350. But if Stage14.0 and Stage24.0 =360 +10%=396. Provide range320–400 GPUh. Calendar with8 concurrent (observed queue max8) vs plan4: ideal at8=40–50h, waves dependencies stage1 dev→priors→dev stage2→freeze→stage1 report/report stage2. Report stage1 independent can run early once resources, so overlap. 8 concurrent effective6 due shared,30-50% overhead: 320/(8*? perhaps6?) etc. Original plan4 ideal82h for350, 5–6days with waves/shared; with8 perhaps3–4days. Should realistic:
+  At4 concurrent:320–400/4=80–100h pure, +30–50%=104–150h =4.5–6.5 days.
+  At8 concurrent:40–50h pure, +30–50%=52–75h =2.5–3.5 days, but sequential gates andCPU prep may make4–5 days. Old dev log actual25 runs~24-28h at8; 35 stage2 ~1.5 days, Stage130 ~0.8 days, report25~1 day; waves total3–5 days. So give 4 concurrent6–8 days,8 concurrent4–5 days (shared & waves) conservative. Should not promise3 days.
+  User says every card reserve40GB, max? Current queue default4 but user raised8. Use8 permitted current. Calendar estimate4–6 days at8,6–9 at4. Perhaps include prep CPU not GPU and 1 day buffer. Run table columns phase, runs, reuse,new, GPU per run,total, dependencies.
+
+  I'll compute several alternatives to present clear:
+  A recommended lean:
+  - Technical smoke new Stage1+Stage2 full chain: 2 small runs not production, ~1GPUh (not counted? Include separately).
+  - S1 dev 15 runs new 3.2-4.0=48–60 (plus inference perhaps total60–75)
+  - S1 report15 new=48–60 (60–75)
+  - R0-dev5 reused0 new
+  - R1' dev5 new
+  - D2'20 new
+  - D4'10 new (2 weights nonzero; w0 reuse D2 winner)
+  - chain closure0 additional (P*S0 from D2; P*S selected from D4)
+  - Stage2 dev total35 new, 3.5-4=123–140.
+  - report Stage2 5 arms×5=25 max new, 87.5–100. Dedup if w0 reduces by up to? For each fold if w=0:
+    - Full==R1+P (save1)
+    - Full−P==R1 (save1)
+    - R1+P+V removed already not in25.
+    Could save2 per fold if all w0=10 runs. Also Full+shuffle with w0 distinct from? R1+P but shuffled input yes distinct. So25 max,15 min if all5 w0 (unlikely but allowed). If w differs by fold no dedup.
+  - R0 report5 reused existing SOTA.
+  - Total production new max90, GPU ~300? Stage1 if3.2-4.0 no inference=96–120; dev123–140; report88–100 =>307–360. Add smoke/inference contingency10%=~340–395. I can quote310–360 measured-style plus 10–15% reserve =>350–410. Desired not inflate too much. Use central350–400 GPUh.
+  Could include old invalid runs not counted. Original old runs 45 completed sunk.
+
+  If User expects 6 report arms perhaps my reduction important. Should explain old R1+P+V collapses to R1+P so cannot count separate. Full-v4' =R1'+P+S. Report arms5. Good.
+
+  Main comparison stats:
+  - Full-v4' vsR0 per-case paired ΔDice, ΔHD95 and bootstrap CI maintain. Should define HD95 direction lower better, bootstrap paired by case,154. C3W secondary.
+  - Acceptance line "SOTA 0.6579/HD95 5.00 strongest reference" primary compare not "must exceed0.679" perhaps old protocol says acceptance line ~0.679. User says SOTA strongest=验收线参照. Could mention no changed threshold, don't invent. Main remains R0; acceptance criteria if original protocol separate unchanged. Primary comparing Full vsR0 not R1. Keep P0 historical.
+  - Other arms secondary Holm. Multiplicity family changed because V arm gone. Pre-specify comparisons perhaps R1',R1'+P,Full−P,Full+shuffle vsR0 and component contrasts? Old "其余臂为次要比较（Holm）" vague. V4.1 can retain exact and update arm names; avoid expanding post hoc. Chain paired contrasts are mechanistic secondary, Holm within secondary family. Main only one confirmatory.
+  - Per-fold different P*,w* allowed, full method includes selection procedure. Frozen before report. No seed repeats.
+  - Report metrics evaluated once after all complete? Plan says eval once. Keep.
+  - Full+shuffle tests prior specificity. Full−P at selected w isolates prior contribution in presence ofS. R1'+P vsR1' isolates P withoutS, Full vsR1'+P isolates S withP. Main chain closed. R0→R1' effect ROI; R1'→R1'+P prior; +S skeleton. Full−P and shuffle are secondary controls. If w=0, some contrasts structurally zero/dedup, report as such not treat as independent.
+
+  D2 selection design subtle: if D2 chooses P* by mean Dice on V_k and D4 uses same V_k to select w, sequential adaptive selection okay nested, but D2 winner metrics reused as w0 candidate means P* selection already optimized on V_k, then comparing w0 (winner) vs new S may bias w0 upward (winner's curse) relative to S evaluated once. This is standard sequential tuning but could favor noS? D2 P* selected max so its metric is optimistically biased; S candidates trained on same P* and V, w0 baseline is also selected P*. Both S new candidates not selected P, but P* fixed. That's okay method selection uses same validation; overall nested report unbiased-ish. Tie rule simplicity.
+  Alternative full factorial {P none,best}×S etc could select w using independent? Not necessary.
+  D2 candidate allowed noP? User protocol accident specifically R1 not candidate. Preserve. NoP remains ref only, meaning P mandatory even if hurts. Given old priors hurt and new a redefined may still hurt, should I question mandatoryP? Main method could force prior even when all worse than R1; simplicity rule cannot drop P. User asks new set including prior无 perhaps suggests allow no prior. But if allow R1/noP as D2 candidate that's precisely old accident? Old plan明文R1只参照, but V4.1 can intentionally redefine D2 candidates to include none? They ask "主比较重定义 R0→R1'→R1'+P..." suggests P remains mandatory. Should follow User likely wants keep R1 reference and D2防呆. I should not include noP in selectable D2. I can state noP/S0=R1' retained reference/control, not candidate; w=0 allows S removal but P remains. If PI wants possibility of noP full, that's separate protocol decision open question perhaps not necessary. User instruction "Stage2 only binary" doesn't require prior mandatory. They ask my advice. Perhaps better design to allow none in D2 as explicit `{none,abc,bc,ac,ab}` while still exclude R1 as named candidate? That is semantically same config R1 and would violate old "R1只参照" unless amended. They want防呆 re-state selection rules, likely don't sneak change. So keep noP excluded.
+
+  Class3 training weighting and D2 new candidates perhaps key open questions. Should minimize open questions. Could offer only two:
+  Q1 Stage1 class3 loss full vs half? But I should recommend one and ask PI ratify. User explicitly says output open questions list requiring拍板，尽量少. Could have3:
+  1. Ratify class3 training full weight and no extra sensitivity (my recommendation) OR half-weight? If cannot decide, this materially changes runs.
+  2. ROI primary keep atlas-ICP vs direct p_nerve? I recommend atlas, probably no need ask if audit decisive. Could include ratify as amendment not open question.
+  3. Old V4.0 results appendix main? Editorial not blocking.
+  4. Budget lean vs full 2x2 (extra10) needs decision. I can recommend lean and list optional if PI requires dev noP+S. Could ask one question budget.
+  5. Stage1 epochs 300 vs1000? Recommend300, no need open.
+  6. MRI channel default no, just表态 no need ask.
+  Open questions ideally 2: class3 weighting and dev full factorial/report budget? Perhaps expected quality threshold not user decision.
+  Could phrase "仅需拍板 2 项；其余按本修订案默认值即可" Q1 class3 weight full recommended vs0.5 fixed; Q2 whether pay+10 runs for dev noP+S full2x2 or lean. Appendix choice editorial not blocking perhaps Q3 optional not key. But User says "需要用户拍板的开放问题列表（编号，尽量少而关键）" likely wants decisions I cannot make e.g. class3 half weight and ROI approach? Could provide3 including old evidence. I should not ask unnecessary. I can make audit decisions all, only true open where user instruction ambiguous: class3 weighting is ambiguous; Stage1 direct ROI vs atlas recommendation enough; extraMRI default no explicit; budget lean recommended. Perhaps only one open question Q1. But if I choose full weight recommendation, still user should ratify because changes pre-reg C3W. I can say "Q1（唯一阻塞项）..." and optional editorial decisions not blocking. Desired output comprehensive though.
+
+  Perhaps use external web? User asks repository audit no need. Could reference nnUNet default values from source not web. Should inspect actual plans and environment for patch, version and timings to ground. Read actual nnUNet plans from `nnunet_cnv/nnUNet_preprocessed/Dataset501_CNVbinaryY/nnUNetPlans.json` perhaps path at root. It is known concrete based code. Use Read. Also Glob configs v4 files. Check actual result logs to verify run statuses not necessary because User supplies facts; but audit wants facts. I can inspect configs/v4_frozen and candidate manifests. Glob.
+
+• 代码审查还发现，V4.1 可直接去掉两处冗余：旧“R1+P+V”在无 V、无骨架时与“R1+P”完全相同；D4 的 `S=0` 又可复用 D2 已选先验组合的结果。因此链闭合不必再单独训练，报告臂也应由 6 个减为最多 5 个。接下来我会把这些计入 run 和预算，并核对现有冻结门需要怎样防呆。
+
+• Interesting configs/v4_frozen_invalid exists. Should read manifests and invalid freeze to understand incident. Also code select perhaps fixed after incident? I read current selector no roles. Perhaps invalid artifacts. Should read fold0 candidates, invalid fold0, perhaps all similar. Read v4_qc one to verify old freeze. Also actual current plans confirms patch. Should read trainer300 file direct to understand inheritance perhaps custom300 stock. Read tools/nnUNetTrainer_300epochs.py. Also default sampling source can locate via python introspection Bash? Dedicated Grep with path envs/nnunet... file unknown use Glob pattern "**/data_loader_3d.py" under env specific. Do in parallel.Important metrics `Dice_123,Dice_c4` secondary can derive via Stage1 posterior partition for binaryY cascade. User specifically asks "逐类 Dice_tier评测随之消失对论文影响" yes only vis head Dice_tier disappears; other binary metrics persist, including Dice_123/c4 via Stage1 posterior possibly new5-class. Could mention secondary partition remains possible using new Stage1 multiclass predictions but not equivalent to Stage2 per-tier segmentation. Should inspect function `partition_Y_by_posterior` expects p1,p4 only? Search.I now know r0_dev fold0/1 EXPORTED present but log grep didn't show due pattern. Actual count perhaps 29 (R0 5+R1 5+abc5+bc5+ac5+ab4=29) plus stage115=44? User says45 inclab_f4 finishing, matches. Good.
+
+  Should read base_data_loader get_bbox.Actual run f0 started22:30 previous day ended12:08 =13.6h due shared severe epochs100-200s, not3.5h. Other runs perhaps2-8h. Budget original3.5-4 but actual concurrent8 epochs120-180s =>10-15h. Should estimate based actual? User provides original budget ~350 and asks V4.1 estimate. I should use observed dev timings now available. Should not assume3.5h. Plan said baseline 38s epoch on perhaps exclusive, actual V4 shared ~120-180s. Eight jobs sharing each with other processes and 40GB reserve, CPU contention perhaps. Should calculate durations for completed logs across runs from timestamps. Could use shell/python parse logs (dedicated Read for known but aggregate analytics via Bash is appropriate, not grep direct; use Python script reading logs? Grep tool required search not shell; but computation can use Python). I can derive actual per-run wall durations from log file first/last and queue state started/ended. Better read queue_state.json perhaps huge. Use Read or Python aggregate. Since user asks estimate and actual data, worthwhile compute run durations from nnUNet logs epoch time median/mean for25. I can use Bash Python to parse logs known pattern, not read secrets. Tool guidance: dedicated Grep for search; Python aggregate is data processing not simply grep, okay. Or Grep all logs "Epoch time" output huge; use Python to summarize regex across `log/v4/nn_*_dev_f*.log`, results. Should be careful actual multiple attempts duplicate logs. I can compute last300 epoch times, mean, total difference first epoch to training done. Read log timestamps. This is local reversible. Could run script inline Bash, no new file. It reads logs not secret. I'll do later resource. Should also Stage1 old timings perhaps not needed new estimate baseline38s isolated. Actual nnUNet R0 logs epochs? R0dev5 completed ~38s? Read r0dev_f2 end or Grep epoch time. Use Python aggregate. Also check GPU current status? Not needed and shouldn't disturb running tasks. I shouldn't modify or queue. Read only.
+
+  Should consider user request deliverable only response not file changes. I won't edit. Could formulate V4.1 new section directly in response. Perhaps no actual code modifications. Fine.
+
+  I should perhaps delegate independent statistical audit to subagent? Not necessary but complex. Could use Agent explore read-only to review my proposed run count for holes, but requires prompt with all context and could help catch. Instructions "Do not delegate understanding"; I've read all. I can launch reviewer after draft? Agent can examine specific protocol issue independently. But not needed, user says previously multiple reviews likely expects us. I have enough.
+
+  Now update todo as I finish audits. I haven't formally recorded but can think through. Perhaps inspect label distribution to inform class weighting and Stage1 feasibility. Important class3 volume proportions, class2 presence per case, class4 etc. I can compute on training data? User authorizes audit and data scope154, reading labels all154 for design? Old design has used all154 GT stats already. But nested protocol warns no report fold access; computing new global label distribution now could further expose report data. I should avoid unnecessary report label analysis. Use existing training fold T0−V0 only if needed. Could compute class volumes on105 train to inform sampling, no need. User asks class2 MR bias, class3 weight. Label distribution useful. I can compute prevalence from existing cache T0−V0 via Python using repo splits; but user asked audit not run experiments? Read-only computing training labels okay but might be beyond. Could avoid because no need; recommend default class uniform forced sampling and full loss. But class3半权 decision could be informed by label amounts. I can inspect existing metrics/cached stats perhaps docs. Grep class volumes.
+
+• 现有实现还确认了两点：class 5 在 Stage 2 主损失中本来就已归入背景，D3 只控制辅助头，因此删除 V 后 D3 应整体废除而非改名保留；C3W 和 `Recall_GT3` 只依赖二值预测与原始 0–5 GT，不依赖该辅助头。`Dice_tier1–4` 会消失，但 `Recall_vis/Dice_vis` 不会消失。
+
+• I can mark 2 done, 3 in progress now. Should not have tools if pure analysis? Could use TodoList and Bash duration computation. I need do calculation to resource later, but 3 first. I can design. Perhaps use Agent reviewer for statistical chain? Could do myself. Perhaps inspect report arms old configs not explicit code but plan enough.
+
+  Important potential issue class 5 background in Stage1: old mapped to background. New directive says "除0外只有5是背景" confirms Stage1 merge0/5, not ignore. Stage2 same. No ambiguity.
+
+  Class3 training half weight: I'll reason deeper from clinical label ontology and C3W. They previously adopted class3 half eval only explicitly, user now says class2 wrongly background, class3 also? Original directive "现 Stage 1 只学 1/4、把 2/3 归背景是错的——class 2 是有影像证据的真神经。" The grammatical reason only class2, class3 no evidence but should not background? They ask category set {1,2,3,4} four foreground +0/5 background? likely yes. They want class3 perhaps half weight training. I need articulate two separate weights:
+  - anatomical membership: class3∈Y with weight1 (membership not probabilistic)
+  - evidence strength: class3 uncertain; evaluation w=0.5, but training target weight is a design hyperparameter not automatic. Since user specifically asks "是否沿用'类别3半权'精神于训练端或维持不动" I'd recommend **not automatically reuse** C3W as training loss because that changes optimization and can reduce RecallGT3; but can set fixed CE/Dice class weight0.5 to align evidence? Which is more methodologically sound? Training on uncertain labels with half weight is common robust loss. But class3 possible course still clinically important, lowering training may lower recall. They want high segmentation Y incl probable course. Since Stage1 role prior/ROI, class3 helps anatomy support, half weight could still include. Without tuning, full equal weight simpler stock nnUNet and respects directive all4 foreground. This likely best.
+
+  I can propose a compromise: **Stage1 uses standard nnU-Net DC_and_CE with all four foreground class weights 1; no class3 half weight in mainline. Keep class3 0.5 only at evaluation. If PI insists on evidence-weighted training, pre-register a single fixed sensitivity (`c3=0.5 in both CE and per-class Dice`, never tune on report) and budget +15 dev Stage1? Actually to compare would require Stage1 dev15 plus downstream maybe selection. Not default.** This is strong stance. Foreground oversampling default33%, eligible classes only1–4 and class uniform within each case. This already over-samples rare classes equally, reducing need weighted loss. No class5 sampling because merged background. Stage2 binary default oversampling33% Y, no class weights. Skeleton D4 as before.
+  - Could class3 full Dice with class-uniform sampling overemphasize no-evidence label, but then I can note monitor class2/3 calibration; do not tune by report.
+
+  Expected quality: Include 4-class Dice macro? Per-class not macro primary because c3 uncertain. c4 primary technical. c1/c2 true image evidence separately. Class3 diagnostic only not used to select backbone or m. This aligns C3W.
+
+  Stage1 outputs probabilities should be float16/full5 channel softmax files for metrics and priors, not old uint8 p1/p4. Quantization old p1,p4 to uint8 can sum>255? old p0=1-p1-p4 could negative due independent uint8 rounding? They computed p1,p4 separately scaled round, p0=1-p1-p4 maybe slight negative but argmax fine. New preserve5 probabilities float16 to normalize, ensemble mean then renormalize (sums1 within rounding). `a=p_nerve=1-p_bg`, where bg merged0/5. Better than sum p1...p4 to avoid rounding. Save dtype float16 (5*163*512*512 ~428M*2=856MB per case huge! Old uint8 p1,p4 ~85MB per case, 154*30 predictions huge). Wait full volume 163*512*512=42.7M voxels; 5 channels float16=427MB per case; uint8=213MB. Many predictions per folds maybe storage huge. Old p1,p4 uint8=85MB per case compressed npz. Full softmax5 uint8=213MB compressed. nnUNet softmax maybe npz float16? Should spec perhaps keep uint8 5 channels or float16 compressed; not asked implementation detail but output contract important. Could say save5-channel probabilities, ensemble before argmax; storage dtype fixed and validated (e.g. uint8 quantization as old or float16 if storage allows). Don't introduce new decision. Not necessary in response.
+  For prior a p_nerve sum4; exact background includes0/5 merged. c4 posterior p4. ROI argmax5.
+  Stage1 secondary metrics `partition_Y_by_posterior` expects [C>=5] bg+1-4, perfect new output. Old Stage1 only p1,p4 so it couldn't support proper Dice_123/c4? The new Stage1 fixes this. I can mention保留 secondary `Dice_123/Dice_c4` via Stage1 posterior becomes more meaningful and no V required. But user specifically C3W unaffected. Avoid overclaim Dice_tier only disappears from Stage2; raw Stage1 per-class Dice available.
+
+  Nested feasibility cost:
+  - Stage1 dev inner model training pool70 (105 split3 folds35 each, train70). Report pool123 split3 folds41, train82. So dev new Stage1 sees fewer cases than old report and than full SOTA. Stage2 dev105. V_k ensemble3, training inner OOF single. Exactly preserve.
+  - Stage1 report all15 must rerun, not just old9, because all old Stage1 architecture/labels invalid. Run in parallel with dev? They can start report Stage1 before dev selection because independent, but using report predictions for quality evaluation restricted until freeze. Training report Stage1 on T_k uses labels incl V_k but not report fold k. It's okay to train early. Priors report can build early too but m unknown; prior records store all m so build all and later prep at frozen m. D thresholds report uses dev frozen, so need dev QC before report priors if applying gate; but could compute transforms/atlas and defer QC. Simpler schedule Stage1 report training parallel; report prior build after dev D1 freeze. This helps calendar.
+  - Report Stage2 prep after m and P etc? Dataset channels all3 fixed, independent selected P, so prep after report priors. Shuffled report dataset can be built same time; report5 arms includes shuffle. IDs new to avoid old data contamination (not reusing Dataset510 etc). V4.1 new dataset IDs 540... etc maybe not needed but useful protocol "new namespace, no overwrite". Could propose `v4_1` results/config dirs and dataset IDs fresh, old read-only archive. Do not use old IDs because labels stage2 changed raw0-5 to binary and stage1 dataset new, risk. R0dev Dataset519 unchanged. New stage1 dataset IDs distinct maybe 540-? Stage1 full data same all154 but splits different, could one dataset with splits30? Use one Stage1 dataset with 30 split entries? nnUNet fold argument accepts0-? splits_final can30 entries. Could simplify datasets but not needed user asks plan not implementation. I can say new dataset/result namespaces and source hashes, don't overwrite old. Good.
+
+  D1 threshold recalc coverage:
+  - `m` selected only training inner OOF; no V_k in rule. `D` bounds on same training cases GT-free predictions, structural fail.
+  - m safety rule old min coverage≥99% across105 (extremely strict) and fallback cases excluded? Old "未回退图谱 ROI最低覆盖率" yet f0 unique failure included coverage0 causing infeasible before fallback; after gate fallback full volume coverage100 so if excluded from m then m maybe lower. Plan says m based un-fallback ROI includes even would-fallback case; "回退后的覆盖率不参与m重新选择" means calculate raw ROI for all including failure, so f0 infeasible. Should repeat exact: m on un-fallback atlas ROI raw all training; fallback full-volume not used to make coverage look good. Yes.
+  - New c4 may fix2200498367; recalc D distribution could change. Re-freeze not reuse numeric m even if same values result; version new.
+  - Atlas threshold0.02: does it need reselect? Old threshold initially chosen via dev, pre-reg. Keep fixed0.02, no retune. c4 ICP target rigid fixed scale1 (implemented after log) keep. LINK_MM45 keep. min_vox10 keep. `D` bounds recomputed because predictions changed; rule unchanged.
+  - ROI direct nerve probs optional exploratory only after report? Do not open during V4.1, otherwise new selection exposure. If new c4 still fails, full-volume fallback handles; do not switch ad hoc. Could pre-register direct p_nerve support as fallback? User asks ROI still atlas or direct. Recommend no. If c4 missing structural gate full volume, safe. Direct support could be used as additional diagnostic coverage comparison on training only but not select. No need.
+
+  D2 priors:
+  - a→p_nerve sum1–4 includes c4 bony landmarks (Y includes4), okay "nerve probability" class4 actually路标 not neural but Y defined union. Could call `p_Y` not p_nerve to avoid semantic confusion: a = P_S1(Y)=∑c=1..4 p_c =1-p_bg. User suggests a→p_nerve. Use `p_Y` (神经/路标联合前景) and explain c4 included by Y definition. If they want anatomical nerve only1–3? User "a→p_nerve?" likely class1-4 foreground. Stage2 Y includes4. Use `p_Y`.
+  - b unchanged c4 distance30mm.
+  - c unchanged Y atlas training only leave-one-out, aligned with new c4.
+  - Priors all rebuilt with new Stage1 even c atlas training GT same because target transforms differ and ROI differs. `a` old p4 gone. `b` new c4. `c` new mapping.
+  - Intensity augmentation only CT remains.
+  - Shuffle controls all selected channels as before.
+
+  Stage2 binary output and supervision:
+  - Respond to user current status "有——V可见度辅助头+S骨架recall，D3/D4尚未开跑" more nuanced: D2/R1 runs noV/S; actual Full with V/S only2epoch smoke, no full run. I should state "是，设计上有神经监督，且主Y损失本身也用1–4神经GT；V是tier-specific auxiliary, S is topology recall onY. 实际仅冒烟，正式D3/D4未跑." User says现状答复已有 but I can confirm. "神经监督" if asks perhaps V+S only, mention main binaryY also neural supervision obvious.
+  - V4.1 after cut V, S remains optional neural supervision. If w=0 selected, Full has only binaryY DC+CE no auxiliary. Make clear not promise S always.
+  - D3 gone entirely; class5 background fixed not tuned. D4 candidates {0,0.5,1}. Old only {0.5,1} forced S; adding0 sensible because no requirement to use skeleton and ties simplicity.
+  - If D4 selection includes w0 P* from D2, Full can degenerate to R1'+P; then report dedup.
+  - Should V removal invalidate old D2 runs? They had noV/S, but Stage1 changed all priors/ROI so yes. R1 no prior still depends ROI so rerun. Stage2 network architecture input channels remains4 even no priors zero, labels now binary vs raw but main same; nonetheless new ROI makes dataset different.
+  - R0 no Stage1 and binaryY exactly same, reuse.
+  - Could old Stage2 `R1` dev be reused as "old design evidence", yes not V4.1.
+
+  Run list perhaps include CPU tasks:
+  - Stage1 dataset prep/plan 1; dev/report Stage1 30 GPU.
+  - Export/ensemble per outer/tier10 CPU jobs.
+  - ROI coverage & QC freeze per5 dev (CPU), priors dev5 + report5=10 CPU, atlas each ~4min? old4 min; with new5 probs perhaps5-15min each. CPU prep dev5+report5+shuffled5=15 nnUNet preprocess jobs. Actually report shuffled data uses same CT/labels but rolled priors, needs5. Stage1 one full dataset prep. Add QC validation and hashes.
+  - Stage2 dev35, report25 max.
+  - Eval10? per fold candidate counts: D2 4 +R1 +R0 refs6? each fold total8? R0+R1+4D2+2D4=8, 40 dev result sets; D4 w0 metrics already D2 winner so full candidates not new. Report5 arms+R0=6 per outer but aggregate OOF each arm154 not per fold perhaps5+1 result sets.
+  - Run table includes new GPU count and reused. CPU separate not GPU.
+  - Smoke 2epoch runs perhaps Stage1 one inner and Stage2 one or two; not production, ~1 GPUh, required before queue. User asked run清单 table perhaps include "冒烟2–3 short, not counted" and total90 +2 smoke. Should specify no large queue before real end-to-end smoke with new5-class Stage1, a=pY, QC, binaryStage2,S0.5/1, ROI export,C3W. Full chain smoke includes new Stage1→priors→D1→R1'+P+S→export→eval. Should class5→bg assert, novis, wDSC unchanged unit tests. Throughput measure first production Stage1 and first Stage2 to recalibrate budget. No hyperparameter tuning during smoke.
+
+  Run time using actual log: I should compute durations more accurately. I'll run Python summarizer now. Use Bash reads `log/v4/*log`, matches r0dev and nn. I'll calculate per file number epoch times max300, median/mean last100, first and last timestamps, training wall between first "Epoch 0" and "Training done". Could parse datetime at line starts. Files appended attempts; just latest300 maybe. Use only logs with >=299 epoch time. I'll produce name,n,mean all,median,last50 mean,elapsed first-last hours. Since log first line may training start, last includes export. Good enough. Should have no new files.
+
+• 嵌套结构和产物链的审计结论已稳定：保留 5 外层折、每折 3 内层及 V_k 三模型集成；ROI 仍以新 c4 做图谱-ICP，不改成神经概率框。m、D 门和全部先验必须按新 Stage 1 重算，但规则本身不变，旧阈值只归档、不沿用。
+
+/bin/bash: line 1: python: command not found
+• python not available default, use python3 which known likely. Failed once adjust not denial.run,n_epochs,mean_epoch_s,median_epoch_s,last50_mean_s,first_to_last_h
+nn_r1_dev_f0,300,162.93,165.03,161.58,13.73
+nn_r1_dev_f1,300,72.97,78.72,78.78,6.22
+nn_r1_dev_f2,300,73.24,79.03,79.25,6.21
+nn_r1_dev_f3,300,73.76,79.52,79.71,6.25
+nn_r1_dev_f4,570,124.4,123.56,166.33,12.54
+nn_r1p_ab_dev_f0,300,84.53,84.39,84.42,7.14
+nn_r1p_ab_dev_f1,300,83.2,83.02,83.05,7.02
+nn_r1p_ab_dev_f2,300,128.65,122.29,133.02,10.82
+nn_r1p_ab_dev_f3,300,130.93,124.21,125.71,11.01
+nn_r1p_abc_dev_f0,300,160.42,160.74,151.06,14.0
+nn_r1p_abc_dev_f1,300,84.08,78.85,108.21,7.64
+nn_r1p_abc_dev_f2,300,83.92,79.13,106.92,7.11
+nn_r1p_abc_dev_f3,576,110.52,119.67,177.63,11.18
+nn_r1p_abc_dev_f4,498,116.22,120.16,115.64,9.58
+nn_r1p_ac_dev_f0,300,115.67,123.26,91.43,9.75
+nn_r1p_ac_dev_f1,300,123.82,123.55,122.92,10.43
+nn_r1p_ac_dev_f2,300,83.68,83.2,83.16,7.07
+nn_r1p_ac_dev_f3,300,124.73,123.81,123.8,10.49
+nn_r1p_ac_dev_f4,300,122.05,122.22,120.93,10.27
+nn_r1p_bc_dev_f0,600,113.19,121.77,180.33,11.7
+nn_r1p_bc_dev_f1,300,110.25,121.64,88.66,9.29
+nn_r1p_bc_dev_f2,300,136.68,120.53,131.63,11.5
+nn_r1p_bc_dev_f3,300,114.56,123.44,123.62,9.65
+nn_r1p_bc_dev_f4,300,123.51,122.85,122.75,10.41
+r0dev_f0,300,38.94,37.98,37.95,3.48
+r0dev_f1,300,39.05,38.01,37.99,3.49
+r0dev_f2,300,38.03,37.99,37.98,3.39
+r0dev_f3,300,39.39,38.0,41.85,3.72
+r0dev_f4,300,37.95,37.94,37.87,3.4
+SUMMARY n= 29 median_of_mean_s= 110.52 median_elapsed_h= 9.58
+Whoa actual Stage2 ROI runs 6-14h not3.5-4 due 4 input channels and data? R0 38s vs R1 median80-120, because input channels4 vs1 and num DA? First stage 4 channels vs1 not 2-3x epoch, perhaps CPU. Also concurrent8. Original plan budget unrealistic. Must use observed actual, per user asks audit重大. I should highlight V4.1 resource original350 no longer valid based measured. Use typical Stage2 dev 6–14h, median~9.6; current old data. V4.1 removing V may reduce? Old R1 noV also same6-14, so V not cause. Binary labels may simplify data loader and remove custom multi-class sampling perhaps speed small, not 3x. Priors4 channels remain. Stage1 one channel should approximate R0 ~38s on unshared or ~? At8 concurrency with 1 channel could be ~60-100s, 5-8h. Should budget realistic based measured:
+  - Stage2 new dev35 ×8–12h median10 =280–420 GPUh, report25×8–12=200–300. Stage1 30×3.5–6=105–180. Total585–900 GPUh (central~750). Calendar at8 concurrent ~73–112h pure +waves =>5–8 days; at4 ~146–225h=>8–14 days. Original350 significantly underestimated because Stage2 actual6-14h vs3.5-4 and more Stage1. Should include "wall hours per run on shared machine used as GPU-hours equivalent" GPU-hour is reserved card time; even shared with others. Each run one GPU for6-14h, so yes.
+  But actual epoch logs include double queue accident causing duplicates and contention; median across includes9.6. Some r1 f1-f4 6.2h (mean73s) cleaner; D2 mostly7-11h. Use central8h perhaps not9.6 due incident. I should present range with assumptions:
+  - isolated/4 concurrent Stage2 old actual ~6–10h; 8 concurrent7–14h. Median9.6.
+  - Stage1 nnUNet one-channel estimate R0 3.4h isolated; at concurrency4–8h. Use4–6h per run.
+  - Stage2 removingV reduces compute only for arms previouslyV (none production yet), R1/P old noV are best guide so no savings assumed. ROI new may differ volume, affecting preprocessing not per epoch? nnUNet fixed250 iterations so patch same, input4 same, inference ROI size affects only export. Training time independent ROI size mostly data shape not patch. Binary label simplifies perhaps little. Stage2 noV output2 vs old R1 output2, exact.
+  - New Stage1 full-volume output5 one channel and300 epochs, training step like R0 but output5 vs2 increases compute perhaps10-20%, so4h isolated; concurrency6–8. Inference full volume and ensemble additional. Use4–6h per run (including inference) conservative perhaps actual6-10 under contention. 30×4–6=120–180.
+  - Stage2 dev35×7–12=245–420.
+  - Report25×7–12=175–300.
+  Total540–900. Central720? Sum lower540 upper900. Add10% failures=600–970. I can give "工作预算约 650–850 GPU时，宽区间540–900，未含故障余量； original350不建议沿用". But desired clear not too many ranges. Choose per-run nominal Stage1 5h, Stage2 10h based median9.6: 30*5=150; dev35*10=350; report25*10=250 =>750 GPUh. Range540–900. Calendar with8 effective concurrency and dependencies:750/8=94h=3.9d ideal, +30–50%=5.1–5.9d. At4=187.5h=7.8d +30%=10d. So "8并发约6–8天，4并发约10–14天" given shared. Original plan 5-6 days at4 with350. I should be honest.
+
+  Could improve speed by fixing data loader or CPU bottlenecks? Not user asks implementation, but resource risk should mention actual measured and profile first. Do not quietly reduce epochs or runs to fit350. Must say cannot fit original budget without explicit scope change; do not shrink deliverable. Perhaps suggest noP Stage2 arms still4 channels with zeros causing overhead; V4.1 could build only selected channels rather than fixed4? Old design fixed4 to same architecture all arms. If remove unused channels, R1/noP has1 channel faster like R0, but changes network architecture and comparability; not allowed silently. Keep4 channels. New binary labels may speed sampling but not huge. Could suggest optimize pipeline without changing model (DA workers/cache) after profiling, but no budget credit before measurement. Important actual Stage2 runs old noV have2 output, so removingV won't reduce their time. I should cite logs `log/v4/nn_r1_dev_f1.log` etc and my aggregated analysis. Response can say "实测R0约3.4–3.7h，而R1/D2约6–14h（29个已完成run中位9.6h），原计划3.5–4h不适用于级联。" I computed29 includes R0 median all9.58? Summary median_elapsed across29 =9.58 because 5 R0 and24 Stage2, median Stage2 similar9.6. Say R1/D2 24 completed median perhaps compute exactly to avoid misquote. I have24 stage2 rows? rows29 -5=24, yes old25 hasab_f4 incomplete so24. Their durations list median? Compute quick mentally sorted:6.21,6.22,6.25,7.02,7.07,7.11,7.14,7.64,9.29,9.58,9.65,9.75,10.27,10.41,10.43,10.49,10.82,11.01,11.18,11.5,11.7,12.54,13.73,14.0. median average9.75+10.27 /2=10.01. Overall29 median9.58 (r0 5 low shifts). Stage2 median10.0h. Mean perhaps9.8. Use约10h. Good. R1 5 runs includes f4 duplicate12.54; median6.25? f0 13.73, f1-3 6.2,f4 12.5 median6.25; D2 slower perhaps10.5. Input priors same4 all, R1 zeros3 channels still data4. Why R1 f1-3 fast vs D2 perhaps concurrent load varied. So resource use median10.
+  - Stage1 one channel R0 3.4h, perhaps Stage1 output5 ~3.5-4.5, ensemble inference perhaps0.5. Use4–6.
+  Nominal total750.
+
+  Could propose lean full factorial additional10 Stage2 dev runs ×10=100GPUh and ~0.5-1day. Good include optional in table or footnote. Class3 half sensitivity if chosen would require much more; avoid.
+
+  Run count total if report dedup perhaps max90. If w=0 every fold report only15, total80; GPU reduces100. But budget must worst-case90. Include "90 个生产 GPU run（上限；另2个短冒烟），复用R0-dev5与R0报告5，旧其余全部作废". Stage130, dev35, report25=90. Add CPU prep25? 10 prior builds +15 stage2 prep +stage1 dataset plan1 =26 CPU tasks. Queue table could list separate rows.
+
+  What about Stage1 report training can reuse same models for multiple outer folds? Each outer k report inner models3 trained on T_k inner minus; distinct15. Dev15 distinct. No reuse across tiers because different pools. Good.
+
+  Expected Stage1 quality improvement must not assume big. I can state "nnU-Net backbone alone on Stage2 gave +0.021 Dice over DynUNet (0.6579 vs0.636) but not transferable; adding class2/3 changes task so old c1/c4 Dice comparison is not controlled backbone comparison. Expected c4 +0.05–0.10 only planning hypothesis; no guaranteed Stage2 improvement. Go/no-go based ROI coverage not class3 Dice." Should I give quantitative range at all? I can perhaps say "合理审计结论是：无法从现有数据给出可信提升幅度；任何+0.x都是猜测。可设资源/质量监测的**工作假设**c1/c4 +0.05–0.10，而非预注册目标。验证..." This directly responds and demonstrates rigor. Desired PI may appreciate honest. Could include old Stage2 backbone delta+0.021 as only empirical anchor and predict Stage1 c1/c4 perhaps +0.02–0.08? Which range more defensible? Stage2 SOTA comparisons different recipe (nnUNet300 vs DynUNet perhaps old SOTA full); plan says DynUNet0.636,nnUNet0.659 +0.023. Stage1 old150 vsnew300 plus better DA, could >0.023. +0.05–0.15 plausible. But not evidence. I can avoid numeric range and instead define minimum validation measurements; user explicitly "预期质量提升幅度" wants a response. Say "审计上只能给低置信度工作预期：c1/c4 Dice +0.03–0.08；不能推导Stage2 Dice增幅。c2/c3没有旧Stage1可比基线，只报绝对值。" This anchored by Stage2+0.023 and extra epochs perhaps0.03–0.08. Would this be seen as arbitrary? I can explicitly label not acceptance. Perhaps choose+0.02–0.08. Old c1 0.35 ->0.37–0.43, c4 .47->.49–.55, modest. ROI atlas already99+ so improved c4 might not change coverage much. The main quality issue z deficiency could improve more than Dice. Should emphasize success measured by z span and coverage rather than Dice only. A good response: "没有足够依据承诺大幅度的 Dice 提升。以 Stage2 换 backbone 的 +0.023 为唯一经验锚，V4.1 计划只写‘c1/c4 Dice 预期小幅至中等提升（工作区间 +0.02~0.08，非假设检验阈值）’，真正验收看...". That is nuanced. Could mention c2/3 possibly低 especiallyc3, do not set them as gate.
+
+  Quality validation fold0 pilot:
+  - same105 inner OOF old/new paired per-case c1/c4 Dice, volume ratio,z-min/z-max errors, c4 own-side ICP success, RMSE,D outlier/fallback, ROI coverage at m values.
+  - All5 dev after complete to avoid only fold0.
+  - c2/c3: per-class Dice/recall/calibration (perhaps ECE not necessary) and false positive; no old baseline.
+  - report outer Stage1 metrics only after freeze, descriptive, no further changes.
+  - Stage2 primary endpoint still final154 Full vsR0, not Stage1 Dice.
+  - Class3 weight not tuned based on these diagnostics.
+
+  Protocol amendment contents:
+  - ID `V4-AM-20261027-01` / versionV4.1, date2026-10-27, supersedes V4 sections0,1,4.1-4.4,5,6,7,8,9 decisions3 and10? C3W retained.
+  - Motivation PI directives + old Stage1 quality + old dev cascade results and ontology correction; not claim purely confirmatory.
+  - Scope154 unchanged, no unlabeled120/250; MRI not new channel.
+  - Data label mapping exact; evaluation GT original0-5.
+  - Nested splits seeds unchanged; dev/report roles, V_k ensemble, final checkpoint300.
+  - Stage1 spec + prior/ROI rules.
+  - Stage2 binary, noV,D3 removed,D4 new.
+  - Selection rules including per-fold and tolerance, references not selectable, sequentialD2 thenD4, candidate whitelists, complete cases, write-once/hashes, invalid old artifacts.
+  - Statistics primary/secondary/Holm, C3W unchanged, no repeated seeds.
+  - Invalidation list: all old Stage1 dev/report predictions/checkpoints not valid for V4.1; old ROI/prior dev+report, configs/v4_qc five m/D, configs/v4_frozen old4 invalid already plus any fifth; old D2 manifests (R1 inclusion) invalid; old D3/D4 configs not run; old candidate selections; old report not started. Keep R0dev5 and SOTA R0 report5, old evaluation code C3W; skeletonGT cache? Skeleton computed from GT Y unchanged and can reuse as data-derived cache, but actual nnUNet online skeleton computed anyway. `results/v4_skel` old DynUNet cache not used. R0 predictions and metrics reusable. Old raw/preprocessed Dataset501 unchanged. Old V4.0 outputs archive not delete.
+  - Old report Stage1 all invalid even if not in user list.
+  - Old S1 quality metrics remain historical.
+  - Frozen D1 numeric values作废 but **rules retained**. New version names.
+  - Plan doc dev log stale line3 needs correction V4.1: per-fold not only fold0/1. Mention docs inconsistency found: `V4_DEV_LOG.md:3` still says development only fold0/1 and pooled selection, conflicts nested per-fold current plan. Should fix in V4.1. `tools/v4_dev_summary.py:2,28` also DEV_FOLDS=(0,1), old pooled summary, unsafe if used for per-fold selection; actual selector per-fold uses own metrics. V4.1 must update or mark legacy to prevent accidental pooled selection. This is an important audit finding beyond user. Also `v4_roi_coverage.py` docline8 says `configs/v4_frozen.yaml` but implementation checks dir; minor doc stale. Not necessary but could mention under implementation gates.
+  - `v4_select_config.py` currently generic candidate manifest no role whitelist, caused incident. Should harden not just text. In plan amendment specify code gate.
+  - `v4_nnunet.py` gates only report trainer against frozen config, current invalid freeze artifact old. Should new `protocol_version=="4.1"` and stage1/prior hashes.
+  - `v4_make_configs.py` legacy DynUNet config generator? It writes configs for legacy stage2, but candidate manifests generated elsewhere not tool. V4.1 needs new generator or explicit whitelist. Mention no hand-written manifests.
+  - `V4_PLAN.md:56-59` file tree names outdated (`trainer_v4.py` vs actualnnUNetTrainerV4.py) minor not critical.
+  - `V4_DEV_LOG.md:3` outdated and metrics aggregated all? Needs sync.
+  - `trainer/v4/__init__.py` old visibility description update if implementing, but user only audit. Could include implementation checklist not actual changes.
+  - Output protocol version on every artifact, `label_ontology_sha256`, `split_sha256`, `plans_sha256`, `stage1_prediction_sha256`, `priors_sha256`, `code_commit`, no override without new amendment. Enough not overdo.
+
+  Risk/open:
+  1 class2 partial CT visibility/MR-derived labels:
+  - CT-only cannot use MR signal at inference, but training target contains privileged information (learning using privileged information) may learn statistical anatomy not actual visibility; risk overconfident FP, domain/site bias, registration errors transferred into labels. Not "MR-specific input bias" in conventional sense because no MR channel; better term label/information bias.
+  - Mitigate: separate per-class Stage1 metrics, probability calibration, stratify c1/c2/c3 recall, compare performance by MRI registration status/quality only as training-only descriptive? At report final can stratify registration quality if pre-registered and no selection. Do not exclude unregistered or poorly registered cases posthoc. No extraMRI channel default because user didn't request, missing115/153 would cause selection and registration leakage, changes data scope, requires new nested registration/channel QC and additional runs. Keep CT-only. Existing MR registration may be used for label audit not model input.
+  - class3 uncertain similar but distinct. Do not treat class2 as background ever.
+  2 class3 full weight may hallucinate; risk discussed. Option half-weight sensitivity only if PI. Keep main.
+  3 Stage1 new4 task may reduce c4 vs old, harming ICP. Atlas+D gate fallback protects, recalc; direct pY ROI not rescue posthoc.
+  4 nested Stage1 cost feasible on8 A100 memory: baseline memory6.5? nnUNet plans batch2 patch56x192x192 fits within job30GB and40GB free reserve; actual existing runs demonstrate same architecture with4 channels fits. Stage1 one input5 output should fit. 30 runs scheduling feasible but budget larger; no algorithmic barrier.
+  5 per-fold selection small V_k18/19 high variance; preserved0.003 tie and simplicity, no pooled selection; w=0 stabilizes. No repeated seeds per previous decision but variance remains limitation. Could mention no new seed.
+  6 redesign exposure all154 and old dev results: main OOF not external confirmation, disclose.
+  7 ROI coverage threshold min99 may be infeasible; full-volume fallback preserves recall but reduces cascade efficiency and R1 may still belowR0. Don't claim improvement before results.
+  8 removingV loses per-tier explainability, compensate Stage1 diagnostics and existing binary low evidence metrics; not primary claim.
+  9 Data augmentation class3/c4 label mapping etc need unit/integration tests. Not asked code but plan include technical gates.
+
+  Open questions list minimal:
+  - Q1 Stage1 class3 training weighting: recommended full1 (C3W only eval) vs fixed0.5 bothCE+Dice. Needs PI because changes pre-reg and scientific target. If choose half, all Stage1 runs follow, no posthoc selection.
+  - Q2 Development budget: lean sequential35 Stage2dev vs add noP+S0.5/1 10 runs for full2x2 (45) costing~100GPUh. Recommended lean because report Full−P already covers noP+S and chain closed. Is this truly needing user? Budget significant yes.
+  - Q3 Old V4.0 results placement: recommended internal dev log+optional appendix not main. Editorial not blocking could state rather than ask.
+  Perhaps Q3 expected class3 is enough. User asked list not necessarily multiple. I can have2.
+  - MRI channel not open: default no explicit.
+  - ROI not open: keep atlas.
+  - stage1 epochs not open:300.
+  This satisfies.
+
+  I'll output V4.1 plan skeleton "可直接并入V4_PLAN的新§" in Chinese markdown perhaps quote block? User wants direct text. I can structure:
+  1. 审计结论（1-7 matching requests）
+  2. `## §10 V4.1...` with subsections 10.1–10.9 concise but complete. But this duplicates audit and run table. Task complex demands long perhaps5-7k Chinese chars. I should avoid redundant repetition by audit conclusions concise and plan skeleton detailed. Run table separate. Open questions. Could aim ~7000-9000 Chinese characters (~10k tokens). Task inherently detailed. Should have all explicit items.
+
+  Could make response first "结论：需作废旧级联，保留R0；推荐90run，预算~750GPUh". Then audit7 items with bullet. Then plan skeleton ready to paste with clauses. Then run table. Then open questions. Might be ~12k Chinese. Should keep light headings (no deep nesting beyond3). Cite code paths throughout as evidence. I can include paths with lines.
+
+  I should verify no further tools needed. Perhaps compute exact run counts and budgets using Python simple arithmetic not necessary but could ensure. I can create small table manually:
+  Stage1 dev15, report15, per4-6 =>60-90 each, total120-180.
+  Stage2 dev:
+  R1'5
+  D2'20
+  D4'10
+  =35 per7-12=>245-420
+  Report:
+  R1'5
+  R1'+P5
+  Full5
+  Full-P5
+  Full+shuf5
+  =25 per7-12=>175-300.
+  Total90 GPU range540-900. Nominal Stage15, Stage210 gives150+350+250=750. Reused:
+  R0-dev5 0
+  R0 report5 0
+  S1 old all30? Old Stage1 runs currently dev15 + report15? User facts old dev15 and report9 maybe all15 complete. I shouldn't say exact old number beyond "所有旧Stage1依赖产物". New30 regardless.
+  CPU:
+  S1 prep/plans maybe1
+  S1 export/ensemble10 (part of GPU runs maybe not separate)
+  D1 coverage/QC5
+  prior build10
+  nnUNet prep dev5+report5+shuf5=15
+  Evaluation/hashes若干
+  I can include run table row "CPU：先验10、D1冻结5、Stage2预处理15，不计GPU run".
+  Smoke:
+  - new Stage1 1 short
+  - new Stage2 binary+S 1 short
+  - perhaps export eval no training
+  2 short runs outside90 ~<1GPUh.
+  Total report if w0 dedup15-25; budget max25.
+  Calendar at8: nominal750/(8*24)=3.9d ideal; with waves+shared30-50%=5.1-5.9; why say6-8? CPU prep and contention observed already in times, adding30-50 might double count sharing. Per-run actual10h includes shared contention, so nominal750 already shared, 8 concurrency gives3.9d, dependencies add20-30=>4.7-5.1. But queue cannot always8 due other users; use6-8 conservative. At4 nominal7.8d +dependencies=9-10, so10-12. I can state "按实测已含共享开销的10h/run估算，8路有效满载理想约4天，考虑波次/CPU预处理/共享波动为5–7天；4路约9–12天。若按范围上限900则8路6–8天". Perhaps simpler "8并发约5–8天，4并发约10–15天". No exact promise. Add first3 Stage1 and first2 Stage2 measured to recalibrate.
+  Original budget350 compared nominal750 ~2.1x. If use4-6 Stage1 and7-12 Stage2 lower540 upper900. I can say original350 only possible if Stage2 returns3.5-4h which contradicts current observed6-14. Not plan on it.
+  - The user original facts says "单个Stage2 run约3.5–4小时" from plan but actual log shows10h due queue. Should have evidence "log/v4/nn_r1_dev_f0.log:2319 training done" with timestamps start at line? Should cite start line read not currently first. I can cite aggregated logs generally with path no line for my computed measure, or `log/v4/nn_r1_dev_f1.log` need exact training done and timestamps. I can Read beginning and end f1 for evidence. Not necessary but response cite `log/v4/` and values from audit. User might trust. Could cite `docs/V4_PLAN.md:182` old estimate vs logs. I can state my aggregate method footnote "按现有29个300-epoch日志统计；R1/D2 24个完整run总墙钟中位约10h". That's verifiable enough. No need output raw table.
+
+  Selection rules detail:
+  - D2 tie simplicity fewer channels, `abc` rank2 vs pairs rank1; current old ranks R1=1, pairs2, abc3. New R1 excluded, can rank pairs1,abc2. Tie within same rank higherDice; exact lexical.
+  - D4 w0 simplest then.5 then1. `S0` reuse P* run.
+  - R0/R1 refs not enter any selectable candidate list. Full config final selected viaD4 not global pool. The final selection is skeleton weight only conditional onP*. D2 best candidate selection is P*, no comparing R1. Good.
+  - Chain comparisons R0/R1/P/Full computed but refs not candidates.
+  - Report full+P shuffle uses same w and P; Full−P uses no priors same w. R1+P is P*S0.
+  - "R1'+P+S?" user question Full = R1'+P*+S(w*) where w may0; if w0 noS. So notation Full-v4' = ROI'+P*+S(w*) withS(0)=identity. Good.
+  - Main comparison remains Full vsR0 paired. If w0 all folds full reduces prior cascade and might not beatR0, but protocol not changed to choose R1 as full to avoid accident.
+  - Should R1 be allowed to win D4 via noP? No. State explicitly this is intentional to prevent old accident; noP remains ablation not candidate. If PI wants data-driven possibility to dropP entirely, must separately amend before runs (could be open Q3 but not necessary). Given old priors hurt, forcingP may be scientifically questionable. Could flag as open question: "是否允许Full在D2选择`P=∅`？本修订默认不允许，以保留R1参照和Full定义；若允许，需明确把∅作为D2候选而非偷塞R1，并增加 simplicity rank0，这不增加run因为R1已有，但改变主方法定义。" This is actually a key design decision and would address old D2 incident and old priors negative. User example prior{无，最优组合} suggests they may want noP option. Perhaps should include as open question rather than budget full factorial. I'll examine user exact: "新的开发维选择集建议（如 骨架权重{0,0.5,1.0}×先验{无,最优组合}？）" They explicitly propose prior none vs best in development dimensions, not necessarily D2 candidate. Could interpret full factorial with R1. I should respond with recommended set and mention noP option. Which is better statistical design? A method should be allowed to drop components that don't help, especially old priors all hurt. But previous prereg R1 reference only and Full-v4 requiresP by definition; main Full vsR0 tests entire method even if worse. In V4.1 major revision, can redefine selection to include noP as D2 ∅ candidate transparently, but user asks防呆 due R1误放. If I include∅ intentionally, code should distinguish `role=selectable` from namedR1 reference even same config? That could reintroduce semantic accident but explicit amendment makes valid. They want "保留预注册选择规则（含D2候选防呆重述）" suggests keep R1 excluded. So default noP not candidate is correct. Open question could ask PI whether to preserve mandatoryP or allow drop, but that adds critical decision. Should I include? User wants minimal, this is more critical than optional full factorial. I can list Q2: "Full是否允许收敛到无先验？建议不允许（保持旧预注册，R1只参照）；若要允许，必须显式新增P=∅候选而非把R1混入，并在V4.1启动前决定。" But is recommendation scientifically best? Perhaps recommend allow∅ because old priors negative? Yet that deviates old selection and further adaptive redesign. Major revision already. Hmm.
+
+  I'll parse "消融链与主比较重定义：R0 → R1' → R1'+P → R1'+P+S?（Full-v4' 的构成）" They expect Full hasP andS optional. P mandatory. I'll keep. Open budget question maybe less critical; only Q1 class3 and Q2 old data appendix? But user asks run estimate so can decide lean without asking. Perhaps open list onlyQ1, plus "非阻塞 editorial" not needed. They said "列表（编号，尽量少而关键）" one is okay. Could include Q2 Stage1 quality failure threshold? No.
+
+  Perhaps class3 weighting can also be decided by me and no open questions? But they explicitly want user拍板， so at least1.
+
+  Should think about V4.1 plan skeleton wording for class3 if Q1 unresolved: A directly mergeable plan cannot have unresolved core spec. I can set recommended default full weight and Q1 asks ratify, so plan is complete conditional on approval. Fine.
+
+  Audit conclusion on old D2 data:
+  - Do not delete; mark `obsolete_v4_0`, keep manifests, logs, predictions and invalid frozen artifacts for audit.
+  - Paper main not include as V4.1 evidence. Optional appendix "pre-redesign exploratory" with table oldR0dev/R1/P, no confirmatory p values and no pooling with new. Must disclose selection incident; old 4 freeze invalid not results themselves necessarily invalid as predictions but invalid for config selection. D2 results still valid exploratory data for old method, but cannot inform new per-fold choices. I can say "可以作为重设计动机/附录历史实验，不作为V4.1候选选择、显著性检验或主结论证据". If use them to motivate redesign, disclose data-driven design exposure.
+  - If paper page limited, dev log enough; don't force appendix. Recommend one paragraph/appendix table to avoid wasting25 runs and transparency.
+
+  Stage1 quality numeric old and new:
+  - Old GT landmark coverage99.97 was used to justify only1/4, but ontology correction means coverage argument only about ROI, not valid reason to relabel2/3 background in a segmentation stage. Highlight audit: GT coverage rationale conflated ROI sufficiency with label semantics. Even if class2/3 not needed forROI, treating them as background teaches model to deny real nerve; especially problematic a=p4? New Stage1 must separate.
+  - Class5 correctly background old and new; no ignore.
+  - Class4 is路标 but partY as label ontology; maintain.
+  - Stage1 expected learning class3 may use prior rather than image evidence; class3 remains independent output not merged with bg. No `ignore` unless PI changes directive (not recommended).
+
+  ROI direct pY:
+  - Direct probability support threshold could leak/tune and outlier FP huge box, low recall tiny box; need calibration and additionalD1 dimensions. AtlasROI robust99+ despite lowDice. Keep.
+  - Use improved c4 forICP; class2/3 influence shared backbone features may improve/harm c4; measure.
+  - For QC D use c4 only, not bilateral pY centroid (could be affected by uncertain class2/3).
+  - m &D recalc all folds, old values not carried even if numerically same.
+  - threshold atlas0.02 and margin set unchanged.
+  - `a=pY` not necessarily c4 only, b same,c same.
+
+  Stage1 training loss more exact:
+  - Stock nnU-Net v2 `DC_and_CE_loss` includes background in CE, Dice `do_bg=False` default. No per-class weights if full. Batch Dice true per plans. Foreground oversampling0.33; class selection uniform among eligible foreground classes per batch sample (source base_data_loader lines103,121). Background0/5 never eligible. This naturally handles rare classes. No special class2 upweight or class3 downweight main. Class2 has image evidence but partialCT, full weight as true class; class3 full weight as label membership but C3W evaluation uncertainty.
+  - If half-weight sensitivity: both CE and Dice? Should say if Q1 choose half, apply0.5 to class3 CE voxel weight and class3 Dice term, class1/2/4=1, no change sampling? Oversampling still uniform might counter downweight; could set sampling class3 probability0.5 relative? User asks sampling how. Main full weight no issue. For optional half sensitivity, specify not part default; don't detail.
+  - Stage2 loss binary standardDC_and_CE plusS if selected; class5 merged bg, no class weights; foreground samplingY default33.
+  - Epoch300 last checkpoint, no best on inner OOF? For Stage1 inner fold validation used solely inference and quality; final checkpoint fixed.
+  - ensemble probability mean3 for heldout; inner OOF single model to build train priors. Same as old.
+  - Use plans from Dataset501? User says nnUNet主干. Recommend regenerate plans on new Stage1 dataset then **freeze if matches** patch/spacing. If automatically planner chooses different patch due labels? Plans patch based image only so same. To ensure match R0 and budget, explicitly copy Dataset501 plans and change dataset name/output labels like Stage2 does. But standard nnU-Net v2主干 means using preconfigured plans is okay. Which better? "以Dataset501的nnUNetPlans为冻结起点（oneCT channel,5out）; verify fingerprint and don't run automatic planner to introduce new design dimension". Patch56x192x192 and spacing fixed. This ensures same backbone. Stage1 full volume same images, so no need replan. Use `nnUNetTrainer_300epochs` as base. Good. Specify architecturePlainConvUNet6 stages32–320,batch2,stockDA/optimizer, no resample,NoNorm. This is precise.
+  - Is Stage1 5-class network using `dataset.json` background0, c1..4, remap5→0; plans label manager handles4 fg. Yes.
+  - Patch physical z=140mm vs old128³ z320mm, old z deficiency55mm. New patch z56*2.5=140mm much smaller than old128*2.5=320mm; might hurt z continuity! Important! Old Stage1128³ has large z context, new56 z patch much smaller; although nnUNet better, z-shortage could worsen due limited context. Should audit patch choice carefully. User asks patch spacing. I shouldn't blindly use56x192x192 if Stage1 landmark z span long. Stage1 old problem z short55mm, new patch z140mm maybe still enough? Old128 z320mm and still short due undertraining; but new56 may lack full nerve course. nnUNet baseline Stage2 usesROI crops where z lengths perhaps small, appropriate. Stage1 full-volume landmark needs longer context to cover anatomy; perhaps use128³? But nnUNet v2 can use patch128³ with6 levels andbatch2, memory? 128³ ~2M voxels vs56*192*192~2.064M, nearly same voxel count! Ah 56*192*192 =2,064,384;128³=2,097,152 nearly equal. Memory similar. Physical aspect differs:128³ isotropic voxels but anisotropic physical spacing (320×145×145mm) vs56×192×192 physical140×217×217mm. Old128³ patch gives z320, in-plane145; new gives z140,in-plane217. For long z nerves, perhaps old patch advantageous. User specifically wants nnUNet主干 not necessarily same patch. Could choose patch **128×128×128** within nnUNet v2 to preserve old Stage1 field of view and similar memory, while other recipe nnUNet. But then architecture strides from Dataset501 has first stage kernel1x3x3 and stride1,2,2, with z downsample later, supports anisotropic. For128³ with z large, planner might choose different spacing/architecture. User asks recommendation, should weigh. Existing Stage1 quality issue z-low short55 despite large z, but new smaller z could be concern. Could propose nnUNet plans with patch **96×160×160**? physical240×181×181 compromise, voxels2.46M slightly larger. Should not invent untested.
+
+  - Standard nnU-Net v2 3d_fullres auto-planning on full-volume images will choose56x192x192 as Dataset501 exactly because same images/spacing, so default answer expected56x192x192. User likely expects baseline consistency. User may not expect custom128³. But audit should flag z context risk and validation. I can say use Dataset501 plans56×192×192 for main to control backbone and comparability; because z-coverage failure is central, do not assume this patch is optimal; validate z-extent on innerOOF. If z-shortage persists, any patch change requires new amendment and dev-only comparison, not silently switch. Could optionally choose128³ from start to preserve context but then not "same nnUNet plans" and quality comparisons confounded anyway. Should decide based scientific rationale.
+  - Stage1 target landmarks c4 foraminal/bony along z? Y structures perhaps trigeminal? CNV cranial nerve V from cistern to branches, z extent perhaps 100mm. Patch140mm may be adequate; plus sliding window and Gaussian context. Old128 z320 full head not necessary. In-plane217 better. So56 okay.
+  - nnUNet architecture uses anisotropic kernels and strides appropriate. Keep default.
+  - Batch2 fits30GB as Stage2 with4 input channels; Stage1 one input5out similar memory.
+  - No resample preserves thin structures (z2.5) and avoids extra interpolation. Good.
+
+  Expected improvement perhaps not only backbone; adding classes can regularize but class3 uncertain can hurt. State no guarantee.
+
+  Run time Stage1 full volume patch same but output5, training still250 iterations/epoch. Good.
+
+  Class2 MRI bias more nuanced: all labels onCT grid, registeredMRI used only annotation. Misregistration can create CT GT mismatch, especially class2; Stage1 full weight may learn noisy boundaries. Should recommend compute/retain registration QC and sensitivity excluding failed registrations? User asks default not extra channel. Could say "不配准成功≠病例剔除；只对预先定义的配准失败/质量层做敏感性，主分析154不动。115/153完成线先完成QC，不能拿115例重新训练一个主模型." Should I recommend wait for remaining38? No because labels already exist and user not asking; no need block V4.1. Use 115 line as label audit subset, not model input. AdditionalMRI channel would require all154 or handle missing and registration inside folds; default no.
+
+  Could class2 be considered "MRI-guided annotated nerve" with evidence onMRI not CT, so Stage1 CT cannot see. Risk not MR-specific bias but "privileged-information supervision". At inference CT only, model can learn probabilistic anatomical prior. Calibrate probabilities, do not interpret p2 as CT visibility. Evaluation separate `Dice_tier2` at Stage1 and recall; paper should not claim CT directly visualizes allclass2. This is important.
+
+  C3W unaffected but if Stage1 training full class3, previous amendment statement "训练目标...全部不变" historically now superseded only in Stage1 label mapping; C3W itself still evaluation-only. Should explicitly avoid logical contradiction: V4.1 supersedes V4-AM-C3W-01 clause "training unchanged" only insofar as new PI-mandated Stage1 ontology; it does **not** import w=0.5 into training. Stage2 main training targetY unchanged; class3 full stage1 is a change but not weighted byC3W. C3W weights not used for D1/D2/D4. Good.
+
+  Report "Dice_tier disappears" actually new Stage1 outputs multiclass so evaluator could calculate per-tier Dice of Stage1 raw predictions (not `vis` head) and Stage2 Y partition. But the specific `Dice_tier` from Stage2 vis disappears. Paper can still present Stage1 per-tier performance as separate cascade component, which may be more informative. Avoid saying all逐类 evaluation disappears. User asks "逐类 Dice_tier评测随之消失对论文影响" response "Stage2 auxiliary Dice_tier disappears; primary and low evidence analyses unaffected; can replace with Stage1 multiclass OOF Dice and binary GT-tier recall, not claim equivalent." Good.
+
+  Old `Recall_vis` labels2∪3 called invisible but user now says class2 has image evidence (MRI), not necessarily CT visible. The name `Recall_vis` perhaps misleading: class2 MRI-guided and class3 possible course grouped low-evidence onCT. Keep for continuity but rename in paper to "MRI-guided/probable-course subset" not "invisible" if class2 has evidence. Do I need flag? User asks entire plan ontology. `metrics_protocol.py` `VIS_LABELS=(2,3)` and doc "invisible segment" remains; new directive class2 true nerve with imaging evidence, but onMRI not necessarilyCT. The metric name `Recall_vis` is ambiguous "vis" might visibility not invisible. It says invisible segment. V4.1 should clarify not reclassify class2 as no-evidence; metric can remain for backward comparability but describe as "class2∪3 low-CT-evidence/reference subset" and not use it to justify background. This may be relevant. Could mention under evaluation "Recall_vis/Dice_vis仍算，但论文改称GT2∪3亚组，避免把class2写成无影像证据；C3W unchanged." No need change metric formula. Nice.
+
+  D2 old freeze4 invalid dueR1 included. New manifests should whitelist exact D2 four and D4 three. Should old fold4 candidates currently incomplete no freeze, still invalid as V4.0. All old configs frozen invalidated for V4.1 anyway.
+
+  Stats acceptance:
+  - `R0-dev` reusable5 on same T_k−V_k; Stage1 new dev trained fewer70 per inner but V ensemble3 each trained70. Stage2 new dev same105. R1 vsR0 comparison dev still different cascade Stage1 training70 vs report Stage182; nested as before.
+  - Report Full trains Stage2 onT_k123, Stage1 report inner models82 each; heldout report ensemble3. R0 report trainedT_k123. Good.
+  - All old Stage1 report outputs invalid because labels/backbone.
+  - Stage1 models for new quality evaluation on V_k and report use ensemble, training innerOOF single for priors; no leakage.
+  - `m` chosen from training innerOOF coverage andD thresholds same; report no recalibration.
+  - `P*`,`w*` per fold freeze all5 before report Stage2. Report Stage1 can run earlier but no report metric access.
+
+  Perhaps pre-register new class3 full weight before any new Stage1 full run. If pilot used full and then change to half after seeing quality, pilot becomes development data and all runs? Better Q1 must decide before any production/pilot whose results used. Smoke2ep numerical no quality okay before. State "Q1在首个非冒烟Stage1前冻结". Good.
+
+  Run schedule:
+  0 Archive invalid artifacts, protocol sign, label remap unit tests, smoke.
+  1 Stage1 dev15 + report15 can queue; dev prioritized. R0 reused. CPU atlases etc.
+  2 D1 freeze5; Stage2 dev prep5.
+  3 R1'5 +D2'20 (could run in parallel); selectP* per fold after complete4 only, R1 not needed for selection but reference.
+  4 D4'10 usingP*, w0 reuse; freeze full5.
+  5 report priors10? dev5 earlier, report5 after stage1 report+D1; prep report normal5 +shuffle5; report25.
+  6 eval once stats.
+  D4 selection per fold can start as soon as itsD2 4 done, not wait all folds, but report requires all5 frozen. Fine.
+  - Chain closure comparison uses existingR0/R1/P/Full. No extra run.
+  - Full−P report perhaps requires noP data same dataset with zero channels, uses selectedw; no separate dev.
+  - Shuffled prior prep5 only report, as old.
+
+  Budget if optional noP S dev full factorial:
+  +10 (R1'+S0.5 andS1 per fold) at7–12=70–120GPUh, nominal100; total100 runs,~850 GPUh. I can footnote as not recommended. This might be open Q2 if desired. But output run table recommended enough.
+
+  Open questions perhaps:
+  Q1 class3 weight full vs half.
+  Q2 "是否额外做开发期无先验×S的2×2（+10run/+100h）？建议不做，报告Full−P已覆盖；若审稿特别强调开发期交互，再加." This is budget and scientific completeness, reasonable to ask.
+  Q3 "旧V4.0附录是否纳入？建议留devlog，论文仅一段设计动机，不进主结果" editorial optional not key so omit or mention in audit no question.
+  Q4 "P=∅ allowed?" I can explicitly state default mandatory per prereg, if PI wants change it's another amendment, but not list as open since user chain indicates P. Could mention in open Q2 instead of full factorial? Which more critical? The user asked "新的开发维选择集...先验{无,最优组合}" likely User may expect noP+S in candidates. My lean plan uses noP onlyR1 ref not full candidate. I should clearly explain and offer optional. Perhaps open Q2 combine: "开发维是采用我建议的序贯精简版，还是做{P=∅/P*}×{S=0,.5,1}全2×2？后者+10run；无论哪种，R1不进入D2候选，Full仍含P*." That addresses example without changing mandatoryP. Good.
+
+  Should respond no tool changes and no actual runs. I should finish todo in stages. I can now mark3 done4 in progress, then perhaps no tools needed except final Todo updates. But to adhere "mark done as soon finished" do so. I can run perhaps arithmetic via Bash not needed. I can formulate budget and then mark4 done5 in progress. Since analysis internal counts as work, can update sequentially with tool calls but not unnecessary repetitive? Todo reminders say update often. I can call now3 done4 in progress and then after a bit of response planning call4 done5 in progress. Could also one call3,4 done5 in progress if both actually done but "do not batch completions at end" I've been working; better now3 done4 in progress, then review calculations perhaps use Bash to print nominal. I'll do quick Python compute table with counts and nominal/range to verify.
+
+• 消融链建议改为 `R0 → R1′ → R1′+P* → R1′+P*+S(w*)`，其中 `w*∈{0,0.5,1}`；主比较仍是 Full-v4′ 对 R0 的 154 例配对分析。D2 只选 4 个非空先验组合，R0/R1′ 永远只是参照；D4 再固定 P* 选骨架权重，避免再把所有名字混在一个候选表里。
+
+Stage 1 dev: runs=15, range=60-90 GPUh, nominal=75 GPUh
+Stage 1 report: runs=15, range=60-90 GPUh, nominal=75 GPUh
+Stage 2 dev (R1 5 + D2 20 + D4 10): runs=35, range=245-420 GPUh, nominal=350 GPUh
+Stage 2 report (5 arms x 5 folds): runs=25, range=175-300 GPUh, nominal=250 GPUh
+TOTAL: runs=90, range=540-900 GPUh, nominal=750 GPUh
+Optional dev no-prior skeleton 2x2 completion: +10 runs, +70-120 GPUh, nominal +100 GPUh
+• Should respond with plan skeleton exact. Before responding, perhaps independent self-review via Agent? I could ask a plan agent to critique my proposed V4.1 with context paths and directives; substantial but may take time and duplicate. User says "你此前多次审查" expects my reasoning. No need.
+
+  I should perhaps check git status? Not modifying so no. No tests required as no code changes. Respond that no code modified? Not necessary but can say "本次仅审计，未改代码/启动run" perhaps user only asked response. Could include at end perhaps not needed.
+
+  Should finalize todos all done. But before responding, draft mentally and ensure all user requests covered:
+  1 Stage1 spec classes, weighting/sampling, nested, patch/spacing/epoch, expected improvement & validation.
+  2 product chain ROI, priors, D1 refreeze.
+  3 Stage2 binary, D3 gone,D4, dev set, Dice_tier impact,C3W.
+  4 ablation chain & main compare.
+  5 salvage, run list,GPU/calendar, old data appendix.
+  6 protocol文书 clauses and invalid freezes.
+  7 risks/open class2 bias, MRI no, feasibility.
+  Output four sections exact.
+
+  I should include citations from code with line numbers:
+  - old mapping `trainer/v4/data.py:61-66` excludes2/3/5.
+  - Stage2 binary `nnUNetTrainerV4.py:135-167` main2, `36`, `150-167`, vis.
+  - plan current nested `docs/V4_PLAN.md:65-70`, `115-122`.
+  - ROI atlas `priors.py:246-265,287-311`; D1 plan `V4_PLAN.md:146-153`.
+  - C3W implementation `metrics_protocol.py:264-301`, `477-481`.
+  - Dice_tier only vis `metrics_protocol.py:410-434`.
+  - selector no whitelist `v4_select_config.py:80-105`; manifest erroneous `configs/v4_dev/fold0_candidates.json:3-11`, invalid artifact.
+  - dev log stale `V4_DEV_LOG.md:3` vs nested plan; summary DEV_FOLDS `tools/v4_dev_summary.py:28`.
+  - plans patch `nnunet.../nnUNetPlans.json:354-372` perhaps path outside repo long; cite as evidence only once.
+  - run timings logs path not line all. `V4_PLAN.md:182-192` old budget.
+  - R0 reuse same plans last checkpoint plan `V4_PLAN.md:72-80`.
+  Should not overload response with citations every bullet but enough to show read.
+
+  "审计结论逐条" likely 7 numbered corresponding user. I can produce each with bold topic and decision, some sub bullets. Then plan skeleton may repeat. To avoid duplication, audit section can be compact with key reasoning and plan section exact normative text. Run table and open issues. I can perhaps integrate audit and plan but user explicitly wants both. Use concise audit (7 paragraphs) and detailed skeleton.
+
+  Potential response length around8000-10000 Chinese chars. Should not be overly verbose but task complex.
+
+  I'll draft audit section:
+
+  开头：
+  "结论：V4.1应作为新协议版本，而非在旧队列上换trainer。R0-dev5与R0报告OOF保留；其余所有Stage1依赖产物作废。推荐CT-only、5输出Stage1、atlas-ICP ROI、二值Stage2无V、P*+可选S；最简闭合设计90个新生产run，实测预算约750GPUh（540–900），不是原350。"
+
+  1:
+  - Stage1 old wrong semantic; coverage argument onlyROI not label mapping. New5 outputs bg(0/5),1–4. StockDC+CE full weights, noC3 half training; class3 uncertainty only evaluation. Foreground oversample33% and uniform among present1–4, no5. If Q1 half changed prefreeze.
+  - nested保留.
+  - patch etc.
+  - quality working range+0.02–0.08 c1/c4 only low-confidence; no Stage2 promised. Validate fold0 paired then all dev. Perhaps this is too much in audit and plan duplicate. Put spec in plan, audit just "可行但提升不保证".
+  2:
+  - ROI keep atlas, direct pY rejected main. a=pY,b,c definitions. D1 re-freeze all.
+  3:
+  - current main alreadyY. D3 gone, class5 fixed bg; D4 includes0. `Dice_tier` removed onlyStage2; other metrics stay; Stage1 per-tier diagnostics. C3W exact unchanged.
+  4:
+  - chain as above, Full=P*S*w, w0 allowed; R1 reference not candidate; main stats same.
+  5:
+  - salvage and old data historical appendix optional. Run budget table later.
+  6:
+  - amendment and invalidations, selector hardening and stale log.
+  7:
+  - class2 CT partial=privileged label not MR input bias; no MRI channel; cost feasible but larger.
+  Then plan skeleton can be copy-paste with normative bullets not explanations. Some repetition unavoidable.
+
+  Plan § perhaps:
+  `## 10. V4.1 修正案（2026-10-27；V4-AM-20261027-01）`
+  10.1效力/范围
+  - motivatedPI + old quality. New namespace. 154, splits seeds,nested etc.
+  - old artifacts invalid list and reusable.
+  10.2 label ontology/training
+  - mapping Stage1,Stage2.
+  - class weights etc.
+  10.3 Stage1
+  - nnUNet details, nested, quality validation.
+  10.4 ROI/priorsD1-AM2
+  - keep atlas, definitions, thresholds.
+  10.5 Stage2
+  - binary2out,4in,300 etc; noV,D3; skeleton.
+  10.6 dev selection
+  - refsR0/R1; D1,D2,D4 candidate lists and tie.
+  -防呆 gates.
+  10.7 report/ablation/statistics
+  - 5 arms,dedup,main paired,secondaryHolm,C3W,no seed,full154 completeness.
+  10.8 evaluation/paper
+  - primary metrics,emptyHD95,C3W,Dice_tier N/A; Stage1 per class; oldV4.0 historical; design exposure.
+  10.9 execution/budget perhaps refer table, smoke and measured throughput.
+  This is many subsections but direct merge.
+
+  Run table separate with columns "阶段/内容/新run/复用/单run估算/GPUh". Include total. R0 report reuse not counted perhaps row.
+  - Stage1 dev15
+  - Stage1 report15
+  - R0-dev0 new5 reused
+  - R1 dev5
+  - D2 20
+  - D4 10
+  - chain0
+  - report25 maxR0 5 reused separate
+  Total90. If table per-run estimate for reused "—".
+  CPU note and smoke.
+  Calendar note actual timings.
+  Old25 D2 historical.
+
+  Open questions:
+  Q1 class3 training weight full recommended vs0.5; decide before non-smoke.
+  Q2 lean vs full2x2+10run; recommend lean. If user wants minimal perhaps two okay.
+  Perhaps Q3 old appendix choice not key no.
+  I can explicitly state MRI question not open: "默认不开，无需新增决策". ROI not open.
+  - If Q1 chooses full, no additional run. If half, same run count (all Stage1 use half) but not compare both; no extra by itself. Good.
+  - Q2 full factorial extra10 dev Stage2, no additional Stage1, nominal850 total and100 runs. Calendar+~0.5day at8 ideal perhaps say+70–120h.
+  - If w0 dedup report reduces run and budget; table worst-case.
+
+  Quality range uncertain: Should I include+0.02–0.08 in plan? User asked expected. Put audit1:
+  "唯一经验锚是Stage2 backbone +0.023，不可直接外推。建议只把c1/c4 Dice +0.02–0.08写成工作假设（非承诺/选择阈值）；c2/c3无旧基线。真正验收是c4/ROI chain..." This is defensible. Stage1 label task changed, paired comparison old c1/c4 still possible but old model trained with2/3 asbg vsnew not, so difference combined effect; say "验证V4.1整体，不做单纯backbone归因". Should separate backbone vs ontology impossible unless extra arm old labels nnUNet; user wants related experiments rerun, not ask controlled backbone ablation. Should I propose an ablation Stage1 nnUNet old1/4 vs new1-4 to separate? User instruction Stage1 design wrong and related experiments rerun. User might expect no old-label new backbone because scientifically wrong and extra runs. I should not add. State cannot attribute improvement separately to backbone vs ontology without extra experiment; not needed for main method but paper wording must say " redesigned Stage1" not "nnUNet caused +x". This is important. Could include in expected quality validation. If user wants backbone claim, optional Stage1 old-label control15 dev runs extra but not necessary; do not propose open to minimize. Main PI directive backbone +ontology simultaneously, no isolated attribution. Paper should avoid causal backbone claim.
+  - The SOTA stage2 comparison nnUNet vsDynUNet provides backbone justification independently.
+
+  Class3 full weight choice and C3W "training unchanged" conflict:
+  In plan10.2 "C3W remains eval-only; class3 full weight is part of new baseline ontology, not importing λ=0.5. The earlier clause 'training unchanged' meant C3W amendment itself, not a prohibition against PI's V4.1 redesign." Could phrase concise to prevent confusion.
+  - Class3 loss weight1 seems contradictory to evidence uncertainty but I explain no automatic relationship.
+
+  Sampling: nnUNet stock chooses eligible class uniformly among classes present per case, not global balanced exactly. Phrase "保留stock 33% forced-foreground；在有病历内按stock规则从存在的1–4类均匀抽类，再抽体素；5/0不作为前景采样点。无额外类频率重采样/类2上采样." Good.
+  - If some cases no class4, eligible excludes it. No ignore labels.
+  - Loss standardDC+CE `do_bg=False` forDice, CE bg learns0/5. Could specify to reassure background included CE. "Dice不含背景，CE含合并背景" stock.
+  - Stage2 binary labels0/1 ensures class5 background. Skeleton targetY same.
+  - Output head Stage15, Stage2 2; no 5vis.
+
+  D1 QC structural fallback usesD bounds new and own-sideICP. c4 predictions new5-way argmax. `D` distributions valid min90? Keep `MIN_VALID_D=90` threshold perhaps same rule. Could mention same valid-D minimum90 and if insufficient no silent fallback? Old code asserts90. User asks entire plan perhaps include. Not necessary but good "其余MIN_VALID_D=90等实现约束不变". I can leave.
+  - Atlas support threshold0.02, m candidates15/25/35, ICP rigid target, link45, dist30. c template selection medianD usingGT train only unchanged.
+  - D1 freeze file new names `configs/v4_1_qc/fold{k}.json`, old `configs/v4_qc` archived. Selection new `configs/v4_1_frozen`. Good.
+  - "旧4份选择冻结及任何后续V4.0冻结一律无效" covers fifth.
+  - "旧D1 m值f0=35... andD intervals全部作废" explicitly list m values? User asks which old thresholds. Say all five m and[L,U] + coverage hashes + chosen config. No need repeat values but perhaps mention m set old f035/f125/f235/f315/f435 invalid.
+  - "报告阶段不得重估m,D,P,w" as old.
+
+  Protocol stale docs:
+  - `V4_DEV_LOG.md:3` says fold0/1 pooled, needs rewrite historical not current. `v4_dev_summary.py` only0/1 must not use V4.1 selector. Add in plan implementation gate "legacy summary marked read-only; per-fold selector only".
+  - V4_DEV_LOG is historical log so don't rewrite old entries, but header updated to point current plan and per-fold. Since user only plan no code, mention "V4.1同步修正".
+  - Selection tool currently simple generic; text alone insufficient. Should explicit code acceptance test: manifests containingR1/R0 must fail; extra/missing candidates fail; wrongmargin/stage1hash fail; incompleteV fail; duplicatecases fail; w0 source mismatch fail; oldprotocol version fail. This is good "防呆".
+  - Report training gate requires all5 new frozen and config hashes.
+
+  Primary stats:
+  - 154 cases, per-case paired bootstrap CI. Number bootstrap10000? Plan old only bootstrap CI, dev summary uses10000. Could specify 10000 seed0 for final? Original stats plan perhaps other file not read. Don't invent. Say沿用原bootstrap方案/seed if frozen. No need.
+  - ΔHD95 direction Full−R0, negative better; ΔDice positive better. Empty predictions diagonal penalty. C3W secondaryλ0.5 sensitivity0.25/0.75 andRecallGT3. wDSC not selection.
+  - Other comparisons Holm. No repeated seeds.
+  - Report stage all5 freeze before training/eval; R0 existing SOTA0.6579/5.00 reference not hard-coded expectation.
+  - Main acceptance line perhaps not restate0.679. User says SOTA strongest reference, I maintain.
+  - Paired Full vsR0 notR0dev. Dev comparisons R0dev for selection reference only.
+
+  MRI:
+  - 115/153 line incomplete, not extra channel; adding would change data scope and require new nested registration and channel plan, not part V4.1. Could list future work requiring separate amendment and full rerun.
+  - Use registeredMRI only annotation QC; no new cases.
+  - class2 cannot be called purely "invisible" in paper; subgroup description.
+
+  Run budget actual measured:
+  I should not present my estimate540–900 as precise if derived range arbitrary. Explain assumptions per table. Stage14–6 anchoredR03.4 +5out/ensemble; Stage27–12 based observed6–14 trimmed. Table notes "规划区间，不是新实测；首跑后校准". Nominal750 uses5/10. Old actual median10 Stage2. Good.
+  - GPU hours counts reservation wall time, not energy. No need.
+  - Calendar8有效并发5–8d,4有效10–15d. CPU preproc perhaps additional but overlapped. Mention failures not included? Range includes some, add10% contingency optional would exceed900. I can say "另留10%故障余量；不要把350当上限". If add10% nominal825, range594–990. Could give "建议向PI申报约800GPUh（含少量余量），上限按900+准备". User asks estimate not budget request. Say "工作点750；建议预算800–900含余量". Table range540–900. Calendar based750–900. This is clear.
+  - Optional full factorial +100 nominal =>850 work point, within high budget but run100.
+  - If w0 dedup savings, report actual lower.
+
+  Smoke before production:
+  - 5-class mapping and background5 test, foreground sampling, ensemble probability, c4 ICP and full-volume fallback, binary head, S transform, no `_vis`, C3W eval. End-to-end real calls as per instructions? I'm not implementing so plan requires. Fine.
+  - New label ontology assertion no raw5 foreground anywhere. Stage2 prep data binary means originalGT still eval.
+  - `nnUNetPlans` unchanged and Dataset501 untouched.
+
+  Expected class2/3 quality:
+  - c2/c3 no old Stage1 baseline, report absolute metrics not improvement.
+  - c3 not used as technical gate forROI.
+  - Stage1 per-class Dice c1/2/4 andc3 diagnostic withC3W? C3W only binaryY, Stage1 per-class macro perhaps no weighted. Do not tune by wDSC.
+
+  Could old Stage2 V aux D3/D4未跑 mean no sunk cost there; explicitly state only smoke, so deletingV does not waste full training. D2 old noV but newStage1 invalid.
+  - R0-dev5 and reportR0 are only GPUruns reusable. GT-derived caches and splits/eval code reusable (not runs).
+  - Old stage1 predictions can be retained for historical comparison fold0 quality but not new pipeline.
+  - Old atlas trainingGT perhaps could reuse atlas itself because definition unchanged and training folds same, but target transforms new; user says prior重建. Could salvage precomputed warped training atlas? The atlas `c` in template space is independent of Stage1 for training cases (GT ICP), so theoretically reusable if same template and training fold. But new version wants provenance and perhaps template same; could reuse to saveCPU notGPU. User asks "废弃与抢救" mostly runs. I can mention "GT-only atlas construction intermediates may be reused only after hash/split/template verification, but all case-level a/b/c/ROI must be regenerated; no need to risk reuse, CPU cost small." Do I need? Could complicate. Safer rebuild all prior products. R0 and raw caches only.
+  - Skeleton GT cache independentStage1 could reuse but online implementation uses current; not critical.
+  - Old D2 data as historical yes.
+
+  One concern: Stage1 nnUNet model training on full volumes with `NoNormalization` input cache. For Stage1 dataset labels raw5 merged bg but images same; can symlink Dataset501 images and plans? Labels need multiclass new so new dataset. Fine.
+  - Stage1 ensemble export probability needs no mirror? nnUNet default validation uses mirroring true? Stage2 custom usesuse_mirroring=True. R0 stock predictor perhaps default mirroring from plans. To match Stage2 use same inference settings Gaussian,step0.5,mirroring as stock. Specify "nnU-Net默认sliding-window/Gaussian/mirroring，三模型做概率平均，最后checkpoint". Mirroring each model increases inference cost but quality. Old Stage1 no mirroring? MONAI sliding window no test-time augmentation. Switching to nnUNet standard includes mirroring, potential improvement and cost. Should include to avoid unspecified. `nnUNetPredictor` in Stage2 uses mirroringTrue. For Stage1 use same stock validation inference; final heldout ensemble across3 and default TTA. More compute but included.
+  - Last checkpoint selection: nnUNet stock `checkpoint_final.pth` and validation best? nnUNet training final may use best or final for validation? Existing custom300 plan says last checkpoint. In nnUNet default perform_actual_validation uses checkpoint_best? Should not handle; plan explicit last.
+  - Epoch300 via custom trainer not stock1000, justified sameR0 and budget. Good.
+
+  Patch concern z: mention "z向截短是预设QC，不以总Dice掩盖；若仍失败，不临场改patch，需另案". This addresses risk without changing main. In risk section "56 z patch physical140mm vs old128 z320mm; despite better framework, z-extent needs explicit gate." Is this a significant risk worth mention? User specifically patch and old z deficit, so yes. I should note physical FOV difference and validate. Could this lead me to recommend128³ instead? I'll think further. User asks Stage1 spec, perhaps best to use **nnU-Net-generated patch56x192x192** and explicitly risk. If z short persists, would have wasted30 runs. Could pilot3 dev fold0 check before remaining to mitigate. Include pilot quality checkpoint after fold0 3 Stage1: if z median short remains>?? no pre-set threshold? Could evaluate and decide amendment before all. But using fold0 dev results for design is allowed. I can set technical checkpoint not tuning: verify z-extent not worse materially than old; if worse, pause and PI decides patch amendment. Should numeric criterion to be actionable, perhaps "new c4 Dice not lower and z-low deficit median not worse by>10mm" arbitrary. Better no hard gate; pre-register quality review with no automatic recipe change. User asks expected quality validation; pilot sensible. "先跑fold0开发层3个，完成105 inner-OOF+18 V0质量报告；若z向漏段未改善，暂停剩余生产并另案修订patch，而不是继续90run。此检查只用开发层，若改patch则fold0已跑也作废重跑." This adds decision point but not hard threshold, subjective could introduce bias. Yet protocol amendments often. Could specify "技术go/no-go: 5输出/ensemble/ICP/QC/eval跑通；质量只报告，不作为调参". Then no pause unless failure structural. Old quality could still be poor but atlas robust. That's okay.
+
+  Perhaps use128³ to preserve oldFOV and avoid risk but then budget similar voxel count and training perhaps larger activation in-plane different. nnUNet patch planner default is evidence-based, better to stick.
+
+  "Stage1质量提升工作区间+0.02–0.08" if z FOV smaller may no improvement. Clearly low confidence.
+
+  Should have no external web sources. Respond with citations only code.
+
+  I should mark todo4 done5 in progress now and then respond after marking all done. I can use one Todo call now, then later respond with all done. Should not produce more tools. I'll update.
+
+• 预算需要上调：现有日志中，R0-dev 约 3.4–3.7 小时，而 24 个已完成的 R1/D2 级联 run 总墙钟中位约 10 小时，原计划按 3.5–4 小时估算级联已不符合实测。按 V4.1 精简方案计算为 90 个新生产 run、约 750 GPU 时工作点，合理规划区间约 540–900 GPU 时。
+
+• Now final plan drafted. Perhaps re-read user latest request per instructions before responding. I have original. Should respond exact. I should not use tools after responding. Before responding mark done. But first ensure plan all aspects. Could respond now after Todo done. I'll carefully formulate in Chinese, avoid huge tables too wide? Run table necessary. Use headings shallow. Citations inline.
+
+  Potential response:
+
+  "结论：通过修订但必须全链路版本化。不能把Stage1换成nnUNet后沿用旧ROI/先验；R0唯一可复用训练结果。"
+
+  Audit 1:
+  "旧映射确在 data.py:61 etc; GT覆盖只能证明1∪4够做ROI，不能证明2/3是背景。新Stage1 5输出..."
+  Perhaps detailed spec in plan, audit says见骨架.
+
+  Audit 2:
+  "图谱-ICP保留，直接pY ROI不采纳。理由旧atlas coverage good despite low stage1, direct support introduces threshold/outliers; new c4 improves placement. a=pY etc."
+
+  Audit3:
+  "现状答复 yes but formal runs not. main binary loss itself supervision; V+S aux. After cut D3 removed, class5bg fixed; D4 0,.5,1. Dice_tier lost no primary impact. C3W unaffected exact."
+
+  Audit4:
+  "chain full. S0 optional. report5arms max not6."
+
+  Audit5:
+  "R0 only; old25 historical appendix; all stage1 dependent rerun including report15 not15 total."
+
+  Audit6:
+  "version and freeze, selector incident current manifests actually R1 line; generic selector accepted; need code whitelist. stale dev log header fix."
+
+  Audit7:
+  "MR risk, no extra channel; feasible but budget."
+
+  Then V4.1 skeleton. Some redundancy. I can condense audit into 7 numbered one paragraph each and plan detail.
+
+  I'll think about run count old "55 run 45 completed" and new total90. My new dev Stage2 35+R0dev5=40 dev result runs vs old55; report25 vs30; Stage130. New90 vs original110 all from scratch. Good.
+  - User might expect D2' 20 +D4' maybe 20 if weights{0,.5,1}×prior{none,best}?? I choose10 with reuse. Explain explicitly so they see not omission.
+  - `链闭合` no extra because D2 winner is R1'+P and D4 full. R0/R1 refs complete. Good.
+  - `D4` candidates S0,S0.5,S1 withP*, S0 result fromD2. So 2new/fold. Fine.
+  - If optional noP+S dev desired+10 not20 because noPS0=R1 andP*S0 reused. Good.
+
+  Stage2 report five arms:
+  1 R1'
+  2 R1'+P*
+  3 Full=R1'+P*+Sw*
+  4 Full−P=R1'+Sw*
+  5 Full+shuffledP*
+  No R1+P+V. R0 external existing.
+  If w*=0 dedup1&4 and2&3, actual3 unique? plus5 =3? Five arms list atw0:
+  R1, R1+P, Full=R1+P, Full-P=R1, Full+shuf =3 unique. So15 min all5w0. Good.
+  - R1+P+S? chain yes.
+  - Full−P naming ifw0 exactlyR1 but okay report dedup.
+  - `R1'+P` selected prior atS0 exists dev and report separately.
+  - Development no explicit Full−P, but report allowed with frozenw no selection. Good.
+
+  D2 simplicity rank no prior not included, pairs simpler thanabc. D4 simplicity w0<.5<1.
+  - HD95 reference only.
+  - Tie strict<0.003 not≤.
+  - Full per-fold can varyP,w andm; nested method.
+  - Candidate whitelist includes exact stage1 version and labels.
+
+  Plan report evaluation once all complete; old R0 access historical no new report look before freeze.
+  - Stage1 report training early okay but no metric evaluation until freeze. Could include.
+
+  V4.1 amendment `D1-AM2` naming perhaps user asked D1-AM1 m,D门 refreeze, should I call "D1-AM1/V4.1" rather than newAM2? I can say "规则沿用D1-AM1，冻结载体版本化为D1-AM1-v4.1（也可称D1-AM2；不要覆盖旧文件）". But direct plan should avoid alternatives. Choose `D1-AM2` and state "算法规则不变，版本升级只为使旧冻结失效". This is clear.
+  - C3W ID remains V4-AM-C3W-01.
+  - V4.1 main ID `V4-AM-20261027-01`.
+  - New config paths `configs/v4_1_qc`, `configs/v4_1_frozen` suggestions, user can merge.
+
+  Data scope:
+  -154 only; 3 no-label dose feasibility not inCV;120 unlabeled and250存量 excluded. MRI no input.
+  - Outer folds extras/splits seed42 unchanged; internal seeds20261022+k, inner seed+100k anddev+5000. Could include exact in plan to preserve.
+  - Development per fold not just0/1; explicitly correct stale dev log.
+  - Last checkpoint no best. 300epochs.
+
+  Quality validation details:
+  "fold0 paired105 innerOOF against old, V018 heldout descriptive; all5 dev later. Metrics c1/c2/c3/c4 Dice, c4 volume ratio, zmin/zmax errors, ICP own-side/RMSE, D fallback, ROI min/mean coverage/volume. No report metric before freeze."
+  "Expected+0.02–0.08 c1/c4 low-confidence working hypothesis. c2/c3 no old comparator. Stage2 no numeric expectation until run."
+  Should class3 full weight and C3W eval only contradiction addressed.
+  - Could mention `nnUNetPlans` patch physicalFOV z140 vs old320 as risk; include quality zextent and risk section.
+
+  Risk list perhaps audit7 covers all. User specifically "风险与开放问题" I should have separate "主要风险" bullets in audit7 or after plan. Could enumerate R1-R5 in section7:
+  R1 CT class2 partial, R2 class3 uncertain, R3 c4 degradation/ROI, R4 design exposure, R5 cost.
+  Then open questions only2.
+
+  Old data appendix:
+  "旧25 D2包括R1 5+20? user calls25 D2; call旧25个级联开发run避免 semantic. Retain read-only; one historical appendix table allowed withV4.0 label warning; no pvalues/confirmatory and no selection."
+  - "4fold freeze invalid does not mean raw predictions fake, but cannot be used as selected config evidence." Good nuance.
+  - "V4.1 design exposure from old allfold dev must be disclosed, external validation needed for confirmatory." Important.
+
+  Citations:
+  Use `code/topocnv_remote/...` full relative from cwd. Long but user can navigate. I can shorten repo relative `code/topocnv_remote/trainer/v4/...`. Good.
+  - `.../nnUNetTrainerV4.py:150` etc.
+  - Budget logs `code/topocnv_remote/log/v4/` directory no line allowed? Instructions say cite code locations aspath:42, logs not code can cite path no line. Fine.
+
+  Response not claim modifications done. "以下是建议文本；未改文件/未启动run" optional at end or start "本次为只读审计". User only asks answer, no need.
+
+  Make sure no ungrounded "24 complete" user saysD2 candidate20/25 with ab finishing and total45; my glob has24 stage2 complete plusR0? I computed24 R1/D2 complete. Yes. Old25 D2 runs includes R1 5+D220; 24 complete at time audit, abf4 not complete. I can say "日志中24个完整R1/D2 run" safe. User says45 complete (15Stage1+5R0+25? =45 if25 includesR1+20? 15+5+25=45, actually all25 completed? User says45 complete andab_f4收尾 contradictory:15+5+20? Stage1dev15+R0 5+R1 5+D2候选20/25 (25 total includesR1) =>15+5+24=44, plus report? They said45 perhaps another. Not important. My actual glob24 stage2 complete. I shouldn't challenge user counts. For old25 data, one finishing still use when complete historical. Budget median24 complete exact.
+  - Run time logs with duplicates attempts 570/600 epochs, elapsed first-to-last includes repeated attempts and double queue. Median10h perhaps some duplicates but clean majority. State "按现有日志粗估" and first new measured recalibrate. Range honest.
+  - `Stage1 per4-6h` based R0 single channel3.4 plus output/ensemble; but at8 concurrency could >6. Range540 lower perhaps optimistic; note planning not guarantee. Good.
+
+  Could user expect original350 estimate not huge? Evidence mandates. I should highlight this as audit finding not hide.
+
+  No tests run needed. I only read and computations. Response "审计结论" no implementation verified.
+
+  I'll mark final todo done and respond.Now compose the response thoroughly. Should decide length around perhaps 7000 Chinese. I'll outline the exact response text.
+
+  Start:
+  "总体结论：应签发V4.1，旧级联全部版本隔离。R0 reused; no old threshold. Recommended90 runs~750."
+
+  Section 1 逐条：
+  1 Stage1: old wrong; new spec summary and quality.
+  2 chain
+  3 stage2
+  4 chain
+  5 salvage
+  6 protocol
+  7 risks
+  Perhaps plan skeleton duplicates all details; audit concise enough.
+
+  Then `V4.1计划骨架` direct section with numbered subclauses, perhaps 8 bullets. Could avoid duplicate details by audit references to plan. For each audit one paragraph.
+
+  Detailed plan:
+  ```
+  ## §10 V4.1...
+  ### 10.1 效力...
+  ...
+  ```
+  User said new § directly merge, can use heading `## V4.1...` not literal§10 perhaps current plan sections0-9 so `## 10. V4.1...` appropriate. This heading inside the response at depth2 alongside others could confuse but fine. Use block quote? Not necessary.
+
+  Plan10.1 data/protocol
+  10.2 labels/training
+  10.3 Stage1/nested
+  10.4 ROI/priors
+  10.5 Stage2
+  10.6 dev selection and防呆
+  10.7 report/statistics/evaluation
+  10.8 invalidation/history
+  10.9 execution
+  Perhaps 9 subsections too much but user wants direct. Use bold numbered clauses within one section instead of headings to keep light. For direct merge, subheadings useful.
+
+  Run table then open questions.
+
+  I'll phrase expected quality:
+  "现有证据不能给出可信保证。唯一相近实测是Stage2主干差约+0.023 Dice，不能外推。建议仅写工作假设c1/c4 Dice+0.02–0.08；不得写成验收承诺，也不得预测Full提高同幅度." This may be viewed overly made-up. Could say "若PI要求填计划数值，用+0.02–0.08作资源规划假设；审计本身不支持点估计". Good.
+  Validation fold0 paired and all5. No new backbone-only arm, so combined effect not isolate. Include.
+  - c4 ROI quality is more important than class3Dice.
+
+  Class3 choice Q1 default full. Plan no half. Good.
+
+  V4.1 selection w0 candidate means D4 selection has3 but D2 winner chosen on same data; no additional run. `S=0` w0 reuse exact prediction/metrics not retrain. Candidate table hash same. Fine.
+
+  C3W formula perhaps not need repeat full but user wants confirm. State original GT class3 weights only, class5/background1, FP unchanged. RecallGT3 same. `HD95` no weighted. `wDSC` not selection.
+  - `Recall_vis/Dice_vis` unaffected but names need clarify class2 evidence. Include.
+
+  Old `Dice_123/Dice_c4` via Stage1 posterior perhaps mention as retained optional:
+  "Stage2的Dice_tier1–4标记N/A；可用新Stage1 multiclass OOF Dice及既有s1_inY secondary分析，另节呈现，不冒充Stage2逐类输出." Good.
+
+  Protocol old freeze list:
+  - `configs/v4_qc/fold0–4` m/L/U
+  - `configs/v4_frozen*` all old chosen configs (4 invalid already)
+  - old candidate manifests all5 (R1 inclusion)
+  - old Stage1 checkpoints/predictions,ROI/priors,nnUNet datasets510–535? Dataset IDs 510-514 report,520-524 dev,530-534 shuffle. Mark not V4.1, no overwrite Dataset501/519. Mention specific IDs optional. "新dataset/result namespace，禁止复用510–535作为V4.1输入" but old R0 uses519, 510–535 range includes519! Don't say range. List 510–514,520–524,530–534 if needed. Better no IDs, just new namespace.
+  - `R0dev Dataset519` keep.
+  - all old Stage2 R1/D2 predictions historical.
+  - `D3/D4` no formal runs so no salvage.
+  - report Stage2 old未启动， no issue.
+
+  Statistical exposure:
+  "Old allfold dev results influenced redesign, so nested selection doesn't make method independently confirmed; paper limitation stronger. New report OOF is internal cross-validation, external required." Good.
+
+  OpenQ2 full factorial optional:
+  "是否需开发期noP×S两臂？ 推荐不做. If yes +10 and total100/~850; does not changeD2 rule/full definition."
+  OpenQ1 class3 half.
+  Could Q3 ask old appendix? I can say not blocking, audit recommendation enough.
+  No other open.
+
+  Run table nominal values:
+  Rows:
+  Stage1 dev15 4–6 60–90 (nom75)
+  Stage1 report15 same
+  R0dev0 reuse5
+  R1'5 7–12 35–60
+  D2'20 140–240
+  D4'10 70–120
+  chain0 0
+  report25 175–300
+  R0 report0 reuse5
+  Total90 540–900 nominal750
+  R1+D2+D4 dev subtotal245–420 correct.
+  Report25 max if w>0; if w0 dedup.
+  CPU note10 prior etc.
+  Smoke2 short outside production.
+  Calendar.
+  - Per-run estimate new Stage2 noV same as old R1 noV so reasonable. Stage1 includes inference? note yes planning.
+
+  I should be careful total lower includes Stage1 dev60 +report60+R1 35+D2140+D470+report175=540 yes. Upper900.
+  Nominal total75+75+50+200+100+250=750.
+  - If class3 half chosen same count, not add comparison.
+  - Full factorial optional +10*7–12=70–120, nominal100.
+
+  Now respond.
+
+• # 总体结论
+
+  应签发 **V4.1 重大修正案**，并把旧级联完整版本隔离，而不是只替换 Stage 1 trainer 后继续队列。
+
+  核心建议是：
+
+  - Stage 1：nnU-Net v2、5 输出（合并背景 + 类别 1/2/3/4），CT-only。
+  - ROI：继续用**新 c4 → 图谱 ICP → 图谱支撑区**，不改成神经概率直接取框。
+  - Stage 2：只保留二值 Y 主头；删除 V 和 D3，保留可选 S。
+  - 消融：`R0 → R1′ → R1′+P* → R1′+P*+S(w*)`。
+  - 只有 **R0-dev 5 run 和 R0 报告层 OOF** 可以直接复用；其余 Stage-1 依赖产物全部重建。
+  - 推荐精简方案共 **90 个新生产 GPU run**，预算工作点约 **750 GPU 时**，规划区间 **540–900 GPU 时**；原约 350 GPU 时已不符合现有级联 run 的实测耗时。
+
+  ---
+
+  # 一、逐项审计结论
+
+  ## 1. Stage 1：旧标签映射确实有本体错误，不能只换骨干
+
+  旧实现明确只保留类别 1/4，并把 2/3/5 写成背景，见 `code/topocnv_remote/trainer/v4/data.py:61-66`。
+
+  “类别 1∪4 的路标框能覆盖 99.97% Y”只能证明它们足以构造 ROI，**不能推出类别 2/3 可以在分割训练中作为负例**。尤其把 class 2 当真神经以外的背景，会直接产生错误负监督。
+
+  建议：
+
+  - 输出为 5 类：`background={0,5}`、`1、2、3、4`。
+  - 四前景全部参与监督；class 5 是确定背景，**不是 ignore**。
+  - 默认使用 stock nnU-Net DC+CE，四个前景类别权重均为 1。
+  - **不建议把 C3W 的 0.5 自动搬进训练端**。C3W 的 0.5 是参考证据敏感性权重，不是类别存在概率，也不等于最优训练权重。class 3 在 V4.1 主方案中仍是完整前景；其不确定性继续由 wDSC 和敏感性分析表达。
+  - 采样保留 nnU-Net 默认 33% forced-foreground；在病例内按 stock 规则从实际存在的 1–4 类中抽类、再抽体素。0/5 不作为前景采样目标，不额外给 class 2 上调或 class 3 下调采样频率。
+
+  嵌套结构必须保留。新 Stage 1 仍有两层共 **30 run**，不是只重跑开发层 15 run。
+
+  ### patch、间距和训练预算
+
+  建议冻结为与现有 nnU-Net 基线一致的 plans：
+
+  - `3d_fullres`
+  - 缓存原始间距：`2.5 × 1.132812 × 1.132812 mm`，不重采样
+  - patch：`56 × 192 × 192`，batch 2
+  - PlainConvUNet 6 级、32–320
+  - CT 单通道、`NoNormalization`
+  - stock nnU-Net 优化器、学习率、增强
+  - 300 epoch，最后 checkpoint，不做 best-checkpoint 选择
+
+  这些参数来自现有 plans，见 `nnunet_cnv/nnUNet_preprocessed/Dataset501_CNVbinaryY/nnUNetPlans.json:354-372`。
+
+  需注意：新 patch 的 z 向物理范围约 140 mm，而旧 128³ patch 约 320 mm。虽然总 patch 体素数接近，**不能只凭 Dice 判断 z 向漏段已经修复**，必须把 z-min/z-max 误差和路标跨度列为专项 QC。
+
+  ### 预期提升与验证
+
+  现有数据不足以承诺大幅提升。唯一相近经验是 Stage 2 上 nnU-Net 相对 DynUNet 约 `+0.023 Dice`，不能直接外推到 Stage 1。
+
+  如计划必须填写数量预期，建议只写：
+
+  > c1/c4 Dice 的低置信度工作预期为提升约 0.02–0.08；这不是验收阈值，也不代表 Stage 2 将获得相同增幅。
+
+  验证方式：
+
+  1. fold 0 新 Stage 1 完成后，在同一批 105 个 inner-OOF 病例上与旧预测逐例配对比较。
+  2. 比较 c1/c4 Dice、预测/GT 体积比、z 向端点误差、c4 own-side ICP 成功率、RMSE、D 门触发率和 ROI 覆盖率。
+  3. c2/c3 没有旧 Stage 1 可比基线，只报绝对 Dice/Recall 和概率校准，不虚构“提升量”。
+  4. 五折开发层完成后汇总；报告折 Stage 1 指标只在配置冻结后描述。
+  5. 因为骨干和标签本体同时改变，结果只能归因于“新 Stage 1 整体设计”，不能写成“提升全部由 nnU-Net 导致”。
+
+  ## 2. Stage 1 产物链：保留图谱-ICP，先验重定义，D1 全部重冻
+
+  **主 ROI 不建议改成 Stage 1 神经概率支撑区。**
+
+  理由是：
+
+  - 旧图谱 ROI 在 Stage 1 Dice 很低时仍达到约 99.98–100% 的 V_0 覆盖，说明它对分割误差有较强缓冲。
+  - 直接神经概率取框会新增概率阈值、清理尺度和外扩参数；低置信度 class 2/3 容易造成框过小，零星假阳性又可能造成框过大。
+  - 旧失败主要发生在 ICP 映射和异常病例，由 D1-AM1 的全体积回退承担安全保护。新 c4 更准，首先应改善的是 ICP，而不是废弃已有高覆盖机制。
+
+  V4.1 定义：
+
+  - `a = p_Y = Σ_{c=1..4} p_c = 1-p_background`，替代旧 `p4`。
+  - `b` 不变：清洁后的预测 c4 距离变换，30 mm 截断。
+  - `c` 定义不变：训练折 Y 人群图谱、留一、以新预测 c4 做目标病例 ICP。
+  - c4 仍只由第 4 类概率产生，不能用 `p_Y` 替代 c4 做 ICP 或 D 门。
+  - Stage 1 改为 5 类后，路标 argmax 必须在完整的 `{bg,1,2,3,4}` 上计算，不能沿用旧三概率公式。
+
+  **所有折的 m 和 D 阈值必须重新计算、重新冻结。**规则不变：
+
+  - atlas support 阈值仍为 0.02；
+  - `m∈{15,25,35}`；
+  - 只用开发层 `T_k−V_k` inner-OOF 训练病例；
+  - 取未回退 ROI 最低覆盖率 ≥99% 的最小 m；不可行则 m=35；
+  - D 仍为新清洁 c4 的双侧质心左右距离，界限仍为 `Q1−3IQR / Q3+3IQR`；
+  - 结构失败或 D 越界仍触发全体积、先验置零、导出不做 ROI 外清零；
+  - 报告阶段不得重新校准。
+
+  建议把新冻结称为 **D1-AM2**，写入新目录，避免覆盖旧 D1-AM1 证据。
+
+  ## 3. Stage 2：主头本来就是二值；删除 V 后 D3 消失，D4 保留并加入 0
+
+  现状答复应再补完整一点：
+
+  - 主 Y 损失本身就使用类别 1–4 的神经/路标 GT；
+  - V 提供逐类可见度辅助监督；
+  - S 提供 Y 骨架召回监督；
+  - 但正式 D3/D4 尚未开跑，只有端到端冒烟，不存在已完成的大规模 V/S 实验需要抢救。
+
+  实现证据见 `code/topocnv_remote/trainer/v4/nnunet/nnUNetTrainerV4.py:135-167`。
+
+  V4.1：
+
+  - Stage 2 数据集直接存二值标签：`Y={1,2,3,4}→1`，`{0,5}→0`。
+  - 输出严格为 2 通道，不再需要 `_NOutLabelManager`、可见度导出或 `_vis.nrrd`。
+  - class 5 固定为背景，因此 D3 整体废除。
+  - D4 改为 `w∈{0,0.5,1.0}`；允许没有 S 的配置通过 0.003 简单性规则胜出。
+
+  ### 对论文评价的影响
+
+  只有依赖 Stage 2 V 头的 `Dice_tier1–4` 消失；其实现确实只读取 `vis_pred`，见 `code/topocnv_remote/MIA/scripts/metrics_protocol.py:410-434`。
+
+  不受影响的有：
+
+  - Dice_Y、HD95_Y、SurfDice_Y；
+  - 空预测 HD95 对角线惩罚及 Empty_pred_Y；
+  - Recall_vis、Dice_vis；
+  - wDSC_Y(0.5)、λ=0.25/0.75 敏感性、Recall_GT3；
+  - L1/低证据亚组评价。
+
+  **C3W 完全不受影响**：它只使用二值预测和原始 0–5 GT；class 3 的参考体素按 λ 加权，背景及 class 5 权重仍为 1，假阳性不折减，见 `metrics_protocol.py:264-301`。
+
+  论文可新增“Stage 1 多类 OOF 诊断”作为级联部件结果，但不能把它冒充 Stage 2 的逐类输出。原有 `Recall_vis/Dice_vis` 可保留计算，论文中宜明确其是 GT 2∪3 亚组，避免把 class 2 写成“无影像证据”。
+
+  ## 4. 消融链和主比较
+
+  推荐定义：
+
+  - `R1′ = 新 ROI + 无有效先验 + S0`
+  - `R1′+P* = R1′ + 本折 D2′ 选择的先验组合`
+  - `Full-v4′ = R1′+P*+S(w*)`，其中 `w*∈{0,0.5,1}`
+
+  因此主归因链为：
+
+  `R0 → R1′ → R1′+P* → Full-v4′`
+
+  D2′ 选出的 `P*、S0` 本身就是 `R1′+P*`，D4′ 的 S0 可直接复用该结果，**不需要另设链闭合训练 run**。
+
+  主比较维持：
+
+  - Full-v4′ vs R0；
+  - 154 例逐例配对 ΔDice、ΔHD95；
+  - paired bootstrap CI；
+  - 其余臂及组件间比较为次要分析，Holm 校正；
+  - 不增加重复 seed；
+  - 每折允许不同 m、P*、w*，评价对象仍是“带内部选择流程的完整方法”。
+
+  ## 5. 废弃与抢救
+
+  可直接复用：
+
+  - R0-dev 5 run 及其预测：无 Stage 1、无先验，主任务已是同一二值 Y。
+  - 现有 R0/SOTA 报告层五折 OOF。
+  - 原始划分、缓存、评价器及 C3W 实现。
+
+  必须重建：
+
+  - 所有旧 Stage 1 checkpoint、概率、inner-OOF 和 ensemble 产物；
+  - 所有开发层和报告层 ROI、ICP、D 门、a/b/c；
+  - R1′、D2′、D4′；
+  - 所有报告层级联臂。
+
+  旧 25 个 R1/D2 开发 run 不应删除，但只能标为 **V4.0 exploratory / pre-redesign evidence**：
+
+  - 可在开发日志完整保留；
+  - 可在附录用一张历史表说明旧级联和先验未显示收益、促成重设计；
+  - 不进入 V4.1 主结果，不与新结果合并做显著性检验，不参与任何新候选选择；
+  - 若论文篇幅有限，正文一段重设计动机加开发日志已足够，不必强行增加附录。
+
+  ## 6. 协议文书：文字修订不够，选择器必须同步防呆
+
+  事故已经在仓库中留下直接证据：`configs/v4_dev/fold0_candidates.json:3-11` 把 R1 放进 candidates，而通用选择器会接受任意 manifest 条目，见 `tools/v4_select_config.py:80-105`。
+
+  V4.1 必须要求：
+
+  - R0/R1′ 只能标为 `reference`，进入 selectable manifest 即硬失败。
+  - D2′ 和 D4′ 分两步、两个 manifest，不允许把所有 run 放进一个总表选最小复杂度。
+  - manifest 由配置生成器产生，不手填 trainer 名。
+  - 校验候选精确集合、缺失/额外候选、V_k 病例集合、m、P*、S、标签版本、Stage 1/先验哈希和协议版本。
+  - 旧协议文件、旧冻结和错误 margin 必须硬拒绝。
+  - D4′ 的 S0 必须引用 D2′ 胜者的同一个结果哈希，禁止悄悄重训或换成别的 run。
+
+  另需修正一个文书遗留：`docs/V4_DEV_LOG.md:3` 仍写“只用 fold 0/1、合并选择”，与现行五折 nested CV 冲突；`tools/v4_dev_summary.py:28` 也仍固定 `DEV_FOLDS=(0,1)`。V4.1 应明确它们仅是历史/描述工具，不能参与新冻结。
+
+  ## 7. 主要风险
+
+  1. **class 2 是特权信息监督风险，不是直接的 MR 输入偏置。**  
+     CT-only 模型无法学习 MR 信号本身，但 MRI 引导 GT 包含 CT 中未必可辨的信息，模型可能学到人群解剖先验、配准误差或过度自信的 class 2 概率。应分开报告 class 1/2 的 Stage 1 表现和校准，不能把 p2 解释为“CT 上确实可见”。
+
+  2. **不建议加入 MRI 输入通道。**  
+     115/153 例配准线不适合直接变成主模型输入：会改变数据范围、引入缺失模态和配准质量选择偏倚，并要求新的嵌套配准/QC协议。V4.1 默认 CT-only；MRI 仅用于既有标注及质量审计。
+
+  3. **class 3 可能带来解剖推断噪声。**  
+     它需要作为前景训练，但不应以 class 3 Dice 单独决定 ROI 或主干成败；临床安全解释也不能因 wDSC 的 0.5 而降低。
+
+  4. **新任务可能反而拉低 c4。**  
+     四前景学习不保证 c4 比旧模型更准，因此 c4、ICP 和 D 门必须先于大规模 Stage 2 排队验证。
+
+  5. **设计曝光进一步扩大。**  
+     旧五折开发结果已参与此次重设计决策。nested CV 能保护剩余候选选择，但不能把 154 例 OOF 变成独立外部确认；论文局限必须明确这一点。
+
+  ---
+
+  # 二、可直接并入 V4_PLAN 的新 §
+
+  ## 10. V4.1 重大修正案（V4-AM-20261027-01，2026-10-27）
+
+  ### 10.1 效力、动机与数据范围
+
+  1. 本修正案依据 PI 于 2026-10-27 提出的三项设计指令，以及旧 Stage 1 的实测质量问题和旧级联开发结果制定。
+  2. Stage 1 改用 nnU-Net v2；标签本体改为 0/5 背景、1/2/3/4 四前景；Stage 2 只保留二值 Y 输出。
+  3. 数据范围保持 154 例及既有五折不变。120 例无标签数据、约 250 例存量及 3 例剂量学专用病例不进入本交叉验证。
+  4. 外层折、V_k 比例和种子、三层内折种子、开发/报告两层结构、最后 checkpoint、0.003 简单性规则、C3W 和统计计划均保留。
+  5. 所有 V4.1 数据集、结果、配置和冻结文件使用新版本命名空间；旧产物只读归档，不覆盖、不删除。
+
+  ### 10.2 标签与训练目标
+
+  1. Stage 1 标签：`0或5→0`，原始 1/2/3/4 保持为四个独立前景，网络输出 5 类。
+  2. Stage 2 标签：`0或5→0`，`1/2/3/4→1`，网络输出 2 类。
+  3. Stage 1 使用 stock DC_and_CE；四前景权重均为 1。CE 学习合并背景，Dice 按 stock 规则不包含背景。
+  4. Stage 1 使用 stock 33% 前景过采样，只有类别 1–4 可作为前景采样目标。
+  5. C3W 仍为评价端修正案，不参与 Stage 1/2 训练、D1/D2/D4 选择或报告配置选择。
+  6. Stage 2 删除可见度辅助头及 D3；S 损失保留为可选组件。
+
+  ### 10.3 Stage 1 规格与嵌套
+
+  1. 使用 nnU-Net v2 `3d_fullres`、300 epoch、最后 checkpoint。
+  2. 输入为缓存 CT 单通道，`NoNormalization`；间距保持 `2.5/1.132812/1.132812 mm`，不重采样。
+  3. plans 冻结为 batch 2、patch `56×192×192`、PlainConvUNet 6 级 32–320，训练增强与基线一致。
+  4. 每外层折 k 保留 3 个内层模型：
+     - dev：内层划分 `T_k−V_k`，V_k 不出现在任何 dev Stage 1 训练中；
+     - report：内层划分整个 `T_k`，报告折不参与训练；
+     - 训练池内病例使用对应 inner-OOF 单模型预测；
+     - V_k 和报告折使用三模型概率平均，推理规则保持一致。
+  5. 输出完整五类概率；在概率平均后再计算 argmax、p_Y 和 c4。
+  6. Stage 1 质量报告必须包含 c1–c4 Dice、c1/c4 体积比、z 向端点误差、c4 ICP 成功率/RMSE、D 门触发率及 ROI 覆盖率；c2/c3 不设无依据的提升阈值。
+
+  ### 10.4 ROI、先验与 D1-AM2
+
+  1. ROI 保留方案 B：预测 c4 → 每侧 ICP → 训练折 Y 图谱支撑区 `>0.02` → 外接框 + m。
+  2. 不采用直接 p_Y 支撑区作为 V4.1 主 ROI，不新增概率阈值或 ROI 调参维。
+  3. 先验重定义为：
+     - `a=p_Y=Σp_1..p_4`；
+     - `b=新清洁 c4 的 30 mm 截断距离变换`；
+     - `c=原 Y 人群图谱定义，以新 c4 映射，训练病例留一`。
+  4. m 选择规则、D 的 3IQR 规则、结构失败及全体积回退规则沿用 D1-AM1，但所有数值按新 Stage 1 重算，形成 D1-AM2 冻结。
+  5. m 只由开发层训练病例的未回退覆盖率决定；V_k 和报告折不参与。报告阶段不重算 m 或 D 界限。
+  6. 旧 `f0=35/f1=25/f2=35/f3=15/f4=35` 及全部旧 `[L_k,U_k]` 作废，不因新计算碰巧相同而视为沿用旧冻结。
+
+  ### 10.5 Stage 2 规格
+
+  1. 网络主输出仅为背景/Y 两通道；标签在数据预处理阶段二值化，评价 GT 仍读取原始 0–5。
+  2. 主损失为 stock binary DC_and_CE；采样为 binary Y 前景采样，class 5 永不被采样为前景。
+  3. 输入仍为 CT+a/b/c 四通道；未选择的先验通道置零，强度增强仅作用于 CT。
+  4. 删除 V、class 5 background/ignore 开发维及 `_vis` 导出。
+  5. S 使用既有在线 tubed-skeleton recall 实现，候选权重为 0、0.5、1.0。
+  6. Dice_tier1–4 对 V4.1 Stage 2 记为不适用；其余二值评价、C3W 和空预测规则不变。
+
+  ### 10.6 开发选择与防呆
+
+  1. R0-dev 和 R1′ 仅为参照，不属于任何 selectable candidate set。
+  2. D1：按 D1-AM2 冻结 m 和 D 门，不训练 Stage 2。
+  3. D2′：固定 S0，只在 `{abc,bc,ac,ab}` 中选择 P*。平均 Dice_Y 最高者胜；差 `<0.003` 时较少先验通道者优先，同复杂度取较高 Dice，再以固定字典序闭合完全平局。HD95 不参与选择。
+  4. D4′：固定本折 P*，候选为 `{P*S0,P*S05,P*S10}`。S0 复用 D2′ 胜者结果；简单性顺序为 `S0<S05<S10`，其余规则不变。
+  5. 最终冻结配置为 `m_k+P*_k+w*_k`；不得再让 R1′ 或其他参照参与最后一次全局排序。
+  6. 选择器必须硬校验：协议版本、候选精确集合、角色、训练/验证病例、完整性、m、P*、w、Stage 1/先验哈希及结果哈希。任何缺失、额外或版本不符均中止。
+  7. 五折新冻结齐全后才允许报告层 Stage 2；报告层不得回调配置。
+
+  ### 10.7 报告臂、统计和论文口径
+
+  1. 报告臂最多为：
+     - R1′；
+     - R1′+P*；
+     - Full-v4′；
+     - Full-v4′−P；
+     - Full-v4′+shuffled P。
+  2. 旧 R1+P+V 臂删除，因为去 V 后与 R1+P 完全相同。
+  3. 当某折 w*=0 时，完全相同配置只训练/导出一次并复用预测，不伪装成独立 run。
+  4. R0 报告层继续使用既有五折 OOF。
+  5. 主比较保持 Full-v4′ vs R0 的逐例配对 ΔDice/ΔHD95 和 bootstrap CI；其余比较为次要分析并做 Holm 校正。
+  6. wDSC_Y(0.5) 为关键次级指标，λ=0.25/0.75 为敏感性分析，Recall_GT3 保留；均不参与模型选择。
+  7. 报告每臂恰 154 例、折间病例集合一致、无重复；空预测继续按既有规则惩罚并报告数量。
+  8. Stage 1 多类结果作为部件诊断另表报告；不得声称 Stage 2 提供逐类分割。
+  9. 旧 V4.0 结果只作重设计前探索性证据。论文必须披露主干选择和本次重设计均使用过同批数据，最终结论仍需独立数据确认。
+
+  ### 10.8 执行门
+
+  1. 大规模排队前完成新链真实冒烟：五类标签映射、0/5 合并、前景采样、三模型概率集成、c4-ICP、D 回退、p_Y 先验、二值 Stage 2、S、ROI 贴回及 C3W 读回。
+  2. 首先完成 fold 0 开发层 Stage 1 质量报告，再放开其余生产队列；质量审查不得接触报告折。
+  3. 用首批新 Stage 1 和 Stage 2 run 的实际耗时修订资源预测，但不因此减少 epoch、折数或候选集合。
+  4. 旧 `configs/v4_qc`、旧候选 manifest、旧 `v4_frozen` 及其变体对 V4.1 全部无效；新文件必须 write-once 并记录哈希。
+
+  ---
+
+  # 三、推荐 run 清单与预算
+
+  以下是精简、闭合且不再训练重复配置的方案。
+
+  | 内容 | 新 GPU run | 复用 | 单 run 规划耗时 | GPU 时区间 |
+  |---|---:|---:|---:|---:|
+  | Stage 1 dev，5 折×3 | 15 | 无 | 4–6 h | 60–90 |
+  | Stage 1 report，5 折×3 | 15 | 无 | 4–6 h | 60–90 |
+  | R0-dev | 0 | 5 | — | 0 |
+  | R1′-dev | 5 | 无 | 7–12 h | 35–60 |
+  | D2′：4 组合×5 折 | 20 | 无 | 7–12 h | 140–240 |
+  | D4′：S05/S10×5 折 | 10 | S0 复用 D2′ 胜者 | 7–12 h | 70–120 |
+  | 链闭合 | 0 | 已有 R0/R1′/P*/Full | — | 0 |
+  | 报告层 5 臂×5 折 | 最多 25 | R0 另复用 5 折 OOF | 7–12 h | 175–300 |
+  | **合计** | **最多 90** | **R0-dev 5 + R0 报告 5** | — | **540–900** |
+
+  预算工作点按 Stage 1 约 5 h、Stage 2 约 10 h 计算：
+
+  - Stage 1：30×5 = **150 GPU 时**
+  - Stage 2 dev：35×10 = **350 GPU 时**
+  - Stage 2 report：25×10 = **250 GPU 时**
+  - **合计约 750 GPU 时**
+
+  依据是现有日志：R0-dev 约 3.4–3.7 h，而完整 R1/D2 级联 run 的总墙钟中位约 10 h、范围约 6–14 h；不能继续沿用 `docs/V4_PLAN.md:182-192` 中级联每个约 3.5–4 h 的假设。上述 4–6/7–12 h 仍是规划值，首批新 run 后应重新校准。
+
+  其他工作：
+
+  - 新链短冒烟约 2 个，不计入 90 个生产 run。
+  - CPU 任务：开发/报告先验各 5 套、D1 重冻 5 折、Stage 2 dev/report/shuffled 预处理共 15 套。
+  - 8 路有效并发、共享机和波次依赖下，现实约 **5–8 天**；4 路约 **10–15 天**。
+  - 建议按 **800–900 GPU 时**预留故障和共享资源余量，而不是把原 350 GPU 时继续作为上限。
+  - 若 w*=0 的折较多，报告层可通过配置去重减少 run 和费用。
+
+  ---
+
+  # 四、需要 PI 拍板的开放问题
+
+  **Q1．class 3 的训练权重是否确认采用本方案的 1.0？**  
+  建议：1.0，C3W 的 0.5 继续只用于评价；不要同时跑 0.5/1.0 来调参。若 PI 明确选择训练端半权，应在首个非冒烟 Stage 1 前一次性冻结为 class 3 的 CE 与 Dice 均 ×0.5，其余类别不变，不能只改其中一处。
+
+  **Q2．是否额外补齐开发期“无先验×S”的完整 2×2 交互实验？**  
+  推荐精简方案不做，因为报告层 Full−P 已提供该对照，且主归因链已闭合。若要求开发期也完整比较 `{无先验,P*}×{S0,S05,S10}`，需增加无先验 S05/S10 各 5 折，即 **+10 run、约 +70–120 GPU 时**，总计最多 100 run、工作点约 850 GPU 时；R1′ 仍不得因此进入 D2′ 候选。
+
+To resume this session: kimi -r session_a95446ef-1b99-4301-8244-7dd4f21fb6e2
