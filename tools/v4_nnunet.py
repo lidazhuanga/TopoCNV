@@ -245,12 +245,10 @@ def gate_report(args):
     qcfg = json.loads(qc.read_text())
     if qcfg.get("fold") != args.fold or qcfg.get("amendment") != "D1-AM1":
         raise SystemExit(f"{qc}: bad fold/amendment ({qcfg.get('fold')}/{qcfg.get('amendment')})")
+    cfg = json.loads((fz / f"fold{args.fold}.json").read_text()).get("chosen_config", {})
     if "margin" in cfg and int(cfg["margin"]) != int(qcfg["margin"]):
         raise SystemExit(f"fold {args.fold}: frozen margin {cfg['margin']} != D1-AM1 margin "
                          f"{qcfg['margin']}")
-    cfg = json.loads((fz / f"fold{args.fold}.json").read_text()).get("chosen_config", {})
-    if "margin" in cfg and int(cfg["margin"]) != int(args.margin):
-        raise SystemExit(f"fold {args.fold}: --margin {args.margin} != frozen margin {cfg['margin']}")
     trainers = cfg.get("trainers") or ([cfg["trainer"]] if "trainer" in cfg else [])
     if trainers and args.trainer not in trainers:
         raise SystemExit(f"fold {args.fold}: trainer {args.trainer!r} not among frozen {trainers}")

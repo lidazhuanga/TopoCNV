@@ -1,0 +1,77 @@
+{
+ "fold": 3,
+ "chosen": "r1",
+ "chosen_config": {
+  "trainer": "nnUNetTrainerV4_R1"
+ },
+ "selected_at": "2026-10-27T12:14:16.264819",
+ "manifest": "configs/v4_dev/fold3_candidates.json",
+ "rule": "max mean Dice_Y on V_k; within tol -> smaller simplicity rank wins",
+ "tol": 0.003,
+ "candidates": [
+  {
+   "name": "r1",
+   "simple": 1,
+   "config": {
+    "trainer": "nnUNetTrainerV4_R1"
+   },
+   "csv": "results/v4_dev_preds/r1/fold3/eval.csv",
+   "n": 18,
+   "mean_dice_y": 0.6463773753476043,
+   "mean_hd95_y": 7.652908593043612,
+   "n_hd95_nan": 0
+  },
+  {
+   "name": "r1p_abc",
+   "simple": 3,
+   "config": {
+    "trainer": "nnUNetTrainerV4_Pabc",
+    "margin": 15
+   },
+   "csv": "results/v4_dev_preds/r1p_abc/fold3/eval.csv",
+   "n": 18,
+   "mean_dice_y": 0.6445693592829901,
+   "mean_hd95_y": 8.252853352510657,
+   "n_hd95_nan": 0
+  },
+  {
+   "name": "r1p_bc",
+   "simple": 2,
+   "config": {
+    "trainer": "nnUNetTrainerV4_Pbc",
+    "margin": 15
+   },
+   "csv": "results/v4_dev_preds/r1p_bc/fold3/eval.csv",
+   "n": 18,
+   "mean_dice_y": 0.6468748833250872,
+   "mean_hd95_y": 8.223430804199237,
+   "n_hd95_nan": 0
+  },
+  {
+   "name": "r1p_ac",
+   "simple": 2,
+   "config": {
+    "trainer": "nnUNetTrainerV4_Pac",
+    "margin": 15
+   },
+   "csv": "results/v4_dev_preds/r1p_ac/fold3/eval.csv",
+   "n": 18,
+   "mean_dice_y": 0.6436866443741043,
+   "mean_hd95_y": 7.59590984556528,
+   "n_hd95_nan": 0
+  },
+  {
+   "name": "r1p_ab",
+   "simple": 2,
+   "config": {
+    "trainer": "nnUNetTrainerV4_Pab",
+    "margin": 15
+   },
+   "csv": "results/v4_dev_preds/r1p_ab/fold3/eval.csv",
+   "n": 18,
+   "mean_dice_y": 0.6407314408238346,
+   "mean_hd95_y": 8.262823312310797,
+   "n_hd95_nan": 0
+  }
+ ]
+}

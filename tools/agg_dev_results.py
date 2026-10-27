@@ -15,6 +15,8 @@ def load(run):
         rows = {}
         with open(p) as f:
             for r in csv.DictReader(f):
+                if r["case_id"] == "MEAN":
+                    continue
                 rows[r["case_id"]] = r
         out[fd] = rows
     return out

@@ -1,0 +1,77 @@
+{
+ "fold": 2,
+ "chosen": "r1",
+ "chosen_config": {
+  "trainer": "nnUNetTrainerV4_R1"
+ },
+ "selected_at": "2026-10-27T12:14:15.564110",
+ "manifest": "configs/v4_dev/fold2_candidates.json",
+ "rule": "max mean Dice_Y on V_k; within tol -> smaller simplicity rank wins",
+ "tol": 0.003,
+ "candidates": [
+  {
+   "name": "r1",
+   "simple": 1,
+   "config": {
+    "trainer": "nnUNetTrainerV4_R1"
+   },
+   "csv": "results/v4_dev_preds/r1/fold2/eval.csv",
+   "n": 18,
+   "mean_dice_y": 0.646861585822305,
+   "mean_hd95_y": 4.77724081681811,
+   "n_hd95_nan": 0
+  },
+  {
+   "name": "r1p_abc",
+   "simple": 3,
+   "config": {
+    "trainer": "nnUNetTrainerV4_Pabc",
+    "margin": 35
+   },
+   "csv": "results/v4_dev_preds/r1p_abc/fold2/eval.csv",
+   "n": 18,
+   "mean_dice_y": 0.6428745927081104,
+   "mean_hd95_y": 4.8812397138783545,
+   "n_hd95_nan": 0
+  },
+  {
+   "name": "r1p_bc",
+   "simple": 2,
+   "config": {
+    "trainer": "nnUNetTrainerV4_Pbc",
+    "margin": 35
+   },
+   "csv": "results/v4_dev_preds/r1p_bc/fold2/eval.csv",
+   "n": 18,
+   "mean_dice_y": 0.6436974224836284,
+   "mean_hd95_y": 4.957466002094126,
+   "n_hd95_nan": 0
+  },
+  {
+   "name": "r1p_ac",
+   "simple": 2,
+   "config": {
+    "trainer": "nnUNetTrainerV4_Pac",
+    "margin": 35
+   },
+   "csv": "results/v4_dev_preds/r1p_ac/fold2/eval.csv",
+   "n": 18,
+   "mean_dice_y": 0.6496753824429119,
+   "mean_hd95_y": 4.193214125353785,
+   "n_hd95_nan": 0
+  },
+  {
+   "name": "r1p_ab",
+   "simple": 2,
+   "config": {
+    "trainer": "nnUNetTrainerV4_Pab",
+    "margin": 35
+   },
+   "csv": "results/v4_dev_preds/r1p_ab/fold2/eval.csv",
+   "n": 18,
+   "mean_dice_y": 0.645771959914547,
+   "mean_hd95_y": 4.823611661196396,
+   "n_hd95_nan": 0
+  }
+ ]
+}
