@@ -106,6 +106,13 @@ class TestV4nnUNet(unittest.TestCase):
         s = T.nnUNetTrainerV4_SMOKE_noP_S10
         self.assertEqual((s.PRIORS, s.VIS, s.SKEL_W), ((), None, 1.0))
 
+    def test_prior_arm_needs_prior_channels(self):
+        """A prior arm on the CT-only Dataset540 fails at network build instead of training without priors."""
+        with self.assertRaises(AssertionError):
+            T.nnUNetTrainerV4_Pabc_S05.build_network_architecture("x", {}, [], 1, 2, True)
+        self.assertTrue(issubclass(T.nnUNetTrainer_SMOKE_2x5, T.nnUNetTrainer))
+        self.assertFalse(issubclass(T.nnUNetTrainer_SMOKE_2x5, T.nnUNetTrainerV4))   # stock output paths
+
     def test_binary_labels_equal_stock(self):
         """On the binary Dataset540 (labels 0/1) the S0 loss is exactly the stock DC_and_CE on Y = label 1."""
         tg = [(t % 2).to(t.dtype) for t in targets()]

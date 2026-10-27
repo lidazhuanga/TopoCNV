@@ -9,8 +9,10 @@
    2026-10-23), never the 5-fold report numbers.
 
 --gt picks the reference labels and the eval directory, so the two never overwrite each other:
-  orig     results/preprocess_cache/... (original labels)   -> results/v4_dev_eval/
-  harm_v1  results/v4_harm_v1/...       (V4.2, V4_PLAN §11.3) -> results/v4_dev_eval_harm_v1/
+  orig     results/preprocess_cache/... (original labels)   -> results/v4_dev_eval/          default --ref r0_dev
+  harm_v1  results/v4_harm_v1/...       (V4.2, V4_PLAN §11.3) -> results/v4_dev_eval_harm_v1/  default --ref v42_r0u
+Each eval directory carries GT.json (reference name, cache, harm config sha256); score and summary refuse
+a directory tagged with another reference.
 
   python tools/v4_dev_summary.py score r0_dev r1_m25
   python tools/v4_dev_summary.py summary r1_m25 r1p_abc r1p_bc --ref r0_dev
@@ -36,12 +38,35 @@ PRED = RESULTS / "v4_dev_preds"
 GT = {"orig": (CACHE_DIR, RESULTS / "v4_dev_eval"),
       "harm_v1": (RESULTS / "v4_harm_v1" / CACHE_DIR.name, RESULTS / "v4_dev_eval_harm_v1")}
 KEYS = ("Dice_Y", "HD95_Y", "SurfDice_Y", "Recall_vis", "Dice_vis", "wDSC_Y_0.50", "Recall_GT3")
+REF = {"orig": "r0_dev", "harm_v1": "v42_r0u"}   # dev-tier baseline on each reference standard
+
+
+def gt_tag(gt):
+    gt_cache = GT[gt][0]
+    rec = {"gt": gt, "gt_cache": str(gt_cache)}
+    if gt != "orig":
+        rec["harm_config_sha256"] = json.loads((gt_cache / "manifest.json").read_text())["config_sha256"]
+    return rec
+
+
+def check_tag(gt, write=False):
+    """Eval directories are tied to one reference standard (GT.json); a mismatch means mixed scores."""
+    eval_dir = GT[gt][1]
+    tag = eval_dir / "GT.json"
+    if tag.exists():
+        have = json.loads(tag.read_text())
+        if have != gt_tag(gt):
+            raise SystemExit(f"{eval_dir} is tagged {have}, not {gt_tag(gt)}")
+    elif write:
+        eval_dir.mkdir(parents=True, exist_ok=True)
+        tag.write_text(json.dumps(gt_tag(gt), indent=1))
 
 
 def score(names, folds, gt):
     gt_cache, eval_dir = GT[gt]
     if not (gt_cache / "DONE").exists() and gt != "orig":
         raise SystemExit(f"{gt_cache} is not built")
+    check_tag(gt, write=True)
     for n in names:
         for k in folds:
             pdir = PRED / n / f"fold{k}"
@@ -73,12 +98,15 @@ def load(name, folds, eval_dir):
 
 
 def boot_ci(d, n=10000, seed=0):
+    if len(d) == 0:
+        return float("nan"), float("nan")
     rng = np.random.default_rng(seed)
     m = rng.choice(d, size=(n, len(d)), replace=True).mean(1)
     return float(np.percentile(m, 2.5)), float(np.percentile(m, 97.5))
 
 
 def summary(names, ref, folds, gt, out_json=None):
+    check_tag(gt)
     eval_dir = GT[gt][1]
     data = {n: load(n, folds, eval_dir) for n in set(names) | ({ref} if ref else set())}
     res = {}
@@ -117,7 +145,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["score", "summary"])
     ap.add_argument("names", nargs="+")
-    ap.add_argument("--ref", default="r0_dev")
+    ap.add_argument("--ref", default=None, help="default: r0_dev (--gt orig), v42_r0u (--gt harm_v1)")
     ap.add_argument("--gt", choices=sorted(GT), default="orig")
     ap.add_argument("--folds", default=",".join(map(str, DEV_FOLDS)))
     ap.add_argument("--json", default=None)
@@ -126,7 +154,7 @@ def main():
     if a.cmd == "score":
         score(a.names, folds, a.gt)
     else:
-        summary(a.names, a.ref, folds, a.gt, a.json)
+        summary(a.names, a.ref or REF[a.gt], folds, a.gt, a.json)
 
 
 if __name__ == "__main__":

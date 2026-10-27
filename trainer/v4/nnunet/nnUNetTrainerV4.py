@@ -26,6 +26,7 @@ V4.2 (V4_PLAN §11) reuses these trainers unchanged on full-image datasets with 
   * validation_v4 Y is already the full volume.
   * With SKEL_W = 0 and no priors, the loss equals the stock DC_and_CE (tests/test_v4_nnunet.py), so B differs
     from R0u (stock nnUNetTrainer_300epochs) only by Skeleton Recall.
+  * Prior arms refuse a dataset without the 3 prior channels (build_network_architecture).
 """
 import os
 from typing import List
@@ -34,6 +35,7 @@ import numpy as np
 import torch
 from torch import autocast, nn
 
+from nnunetv2.inference.sliding_window_prediction import compute_gaussian
 from nnunetv2.training.dataloading.data_loader_3d import nnUNetDataLoader3D
 from nnunetv2.training.loss.compound_losses import DC_and_CE_loss
 from nnunetv2.training.loss.dice import MemoryEfficientSoftDiceLoss, get_tp_fp_fn_tn
@@ -359,6 +361,7 @@ class nnUNetTrainerV4(nnUNetTrainer):
         with open(os.path.join(out_dir, "DONE"), "w") as f:
             f.write(f"{len(dataset_val.keys())} cases\n")
         self.set_deep_supervision_enabled(True)
+        compute_gaussian.cache_clear()     # as the stock perform_actual_validation (memory only)
 
 
 def _arm(name, priors=(), vis=None, skel_w=0.0, smoke=False):
@@ -366,6 +369,9 @@ def _arm(name, priors=(), vis=None, skel_w=0.0, smoke=False):
 
     def build_network_architecture(architecture_class_name, arch_init_kwargs, arch_init_kwargs_req_import,
                                    num_input_channels, num_output_channels, enable_deep_supervision=True):
+        # on a CT-only dataset a prior arm would silently train (and be reported) without its priors
+        assert not priors or num_input_channels == 1 + len(PRIOR_CHANNELS), \
+            f"{name} needs CT + {len(PRIOR_CHANNELS)} prior channels, the dataset has {num_input_channels}"
         return nnUNetTrainerV4._build(architecture_class_name, arch_init_kwargs, arch_init_kwargs_req_import,
                                       num_input_channels, n_out, enable_deep_supervision)
 
@@ -404,7 +410,17 @@ for _w, _wt in ((0.5, "05"), (1.0, "10")):
     _arm(f"nnUNetTrainerV4_noP_S{_wt}", skel_w=_w)
     for _combo in ("abc", "bc", "ac", "ab"):
         _arm(f"nnUNetTrainerV4_P{_combo}_S{_wt}", priors=tuple(_combo), skel_w=_w)
-# smoke test only (2 epochs x 5 iterations): tests/v4_nnunet_smoke.sh
+# smoke test only (2 epochs x 5 iterations): tests/v4_nnunet_smoke.sh, tests/v4_nnunet_smoke42.sh
 _arm("nnUNetTrainerV4_SMOKE_Pabc_Vign_S10", priors=tuple("abc"), vis="ignore", skel_w=1.0, smoke=True)
 _arm("nnUNetTrainerV4_SMOKE_R1", smoke=True)
 _arm("nnUNetTrainerV4_SMOKE_noP_S10", skel_w=1.0, smoke=True)
+
+
+class nnUNetTrainer_SMOKE_2x5(nnUNetTrainer):
+    """Stock nnUNetTrainer cut to 2 epochs x 5 iterations, smoke only (tests/v4_nnunet_smoke42.sh): exercises
+    the stock-output paths of tools/v4_nnunet.py (Stage 1 --npz probabilities, export42 from validation/)."""
+
+    def __init__(self, plans, configuration, fold, dataset_json, unpack_dataset=True,
+                 device=torch.device("cuda")):
+        super().__init__(plans, configuration, fold, dataset_json, unpack_dataset, device)
+        self.num_epochs, self.num_iterations_per_epoch, self.num_val_iterations_per_epoch = 2, 5, 2

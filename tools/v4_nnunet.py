@@ -29,6 +29,11 @@ V4.2 (V4_PLAN §11): full image, labels from the frozen harmonised cache results
   $PY tools/v4_nnunet.py train42 --dataset binY --fold 0 --variant dev --name v42_r0u     # stock R0u
   $PY tools/v4_nnunet.py train42 --dataset binY --fold 0 --variant dev --trainer nnUNetTrainerV4_noP_S05 --name v42_s05
   $PY tools/v4_nnunet.py train42 --dataset s1 --fold 0 --variant dev --inner 0            # Stage 1 inner model
+  bash tests/v4_nnunet_smoke42.sh <gpu>         # GPU smoke on tiny copies in a scratch nnU-Net home
+Checks: prep42 verifies every harmonised label against the manifest and records the label digest in
+v42_meta.json and the done marker; train42 refuses fold/inner indices outside the split table and prior arms
+on Dataset540, logs each launch to <fold dir>/v42_runs.jsonl, and marks a Stage 1 run done only when every
+held-out inner case has its probabilities (validation/*.npz, nnU-Net axis order = cache order).
 Splits:
   Dataset540  entries 0-4 = report fold k (train T_k, val fold k); entries 5-9 = dev fold k (train T_k - V_k, val V_k).
   Dataset541  entry 3k + j = dev-tier inner model j of fold k; entry 15 + 3k + j = report tier (trainer/v4/splits.py).
@@ -36,8 +41,10 @@ IDs 542-556 are reserved for the 4-channel prior datasets, which are built after
 Plans: Dataset501's, with only dataset_name changed. Dev outputs use names with the v42_ prefix.
 """
 import argparse
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -62,6 +69,7 @@ HARM_DIR = RESULTS / "v4_harm_v1"
 HARM_CFG = ROOT / "configs" / "v4_harm" / "harm_v1.json"
 V42 = {"binY": (540, "Dataset540_CNVv42binY"), "s1": (541, "Dataset541_CNVv42s1")}
 R0_TRAINER = "nnUNetTrainer_300epochs"
+SMOKE_STOCK = "nnUNetTrainer_SMOKE_2x5"   # stock trainer, 2 epochs x 5 iterations (tests/v4_nnunet_smoke42.sh)
 
 
 def env():
@@ -373,26 +381,60 @@ def v42_splits(what):
 
 
 def v42_split_index(what, fold, variant, inner=None):
+    # an index past splits_final.json makes nnU-Net fall back to a random 80:20 split of all cases
+    assert 0 <= fold < 5 and variant in ("dev", "report"), f"fold 0..4 and dev/report only ({fold}, {variant})"
     if what == "binY":
+        assert inner is None, "binY has no inner folds"
         return fold if variant == "report" else 5 + fold
     assert inner is not None and 0 <= inner < N_INNER, "Stage 1 needs --inner 0..2"
     return (0 if variant == "dev" else 5 * N_INNER) + N_INNER * fold + inner
 
 
-def harm_cache():
-    """The frozen harmonised label cache (tools/v4_harmonize_labels.py); refuses an unbuilt or mismatched one."""
-    import hashlib
+def _label_sha(a):
+    c, cache = a
+    lab = np.load(Path(cache) / f"{c}_label.npy")
+    return c, hashlib.sha256(np.ascontiguousarray(lab).tobytes()).hexdigest()   # = arr_sha of the build
+
+
+def harm_cache(verify=True):
+    """The frozen harmonised label cache (tools/v4_harmonize_labels.py); refuses an unbuilt or mismatched one.
+
+    Checks harm_v1.json against the manifest's config sha256, trainer/v4/harmonize.py against the sha256
+    recorded at calibration, the manifest's case list, and (verify) every label array against its
+    manifest sha256. Returns (cache dir, config sha256, label digest); the digest = sha256 of the sorted
+    'case:sha256_label' lines, recorded in v42_meta.json, the done markers and every run record."""
     cache = HARM_DIR / CACHE_DIR.name
     if not (cache / "DONE").exists():
         raise SystemExit(f"{cache} not built: run tools/v4_harmonize_labels.py calibrate / build / qa first")
-    sha = hashlib.sha256(HARM_CFG.read_bytes()).hexdigest()
+    cfg = HARM_CFG.read_bytes()
+    sha = hashlib.sha256(cfg).hexdigest()
     man = json.loads((cache / "manifest.json").read_text())
     assert man["config_sha256"] == sha, "harmonised cache was built from a different harm_v1.json"
-    return cache, sha
+    rule = ROOT / "trainer" / "v4" / "harmonize.py"
+    assert (hashlib.sha256(rule.read_bytes()).hexdigest()
+            == json.loads(cfg)["code_sha256"]["trainer/v4/harmonize.py"]), f"{rule} changed since calibration"
+    assert sorted(man["cases"]) == sorted(all_cases()), "manifest cases != the study cases"
+    if verify:
+        from multiprocessing import Pool
+        with Pool(8) as p:
+            got = dict(p.imap_unordered(_label_sha, [(c, str(cache)) for c in man["cases"]]))
+        bad = sorted(c for c in man["cases"] if got[c] != man["cases"][c]["sha256_label"])
+        assert not bad, f"harmonised labels differ from the manifest: {bad[:5]}"
+    digest = hashlib.sha256("".join(f"{c}:{man['cases'][c]['sha256_label']}\n"
+                                    for c in sorted(man["cases"])).encode()).hexdigest()
+    return cache, sha, digest
+
+
+def _atomic_nifti(arr, path, dtype):
+    """write_nifti through raw/.tmp42 + rename, so an interrupted write never leaves a partial file in place."""
+    tmp = path.parent.parent / ".tmp42" / path.name
+    tmp.parent.mkdir(exist_ok=True)
+    write_nifti(arr, tmp, dtype)
+    os.replace(tmp, path)
 
 
 def _write42(a):
-    c, what, cache, raw = a
+    c, what, cache, raw, overwrite = a
     import nibabel as nib
     raw = Path(raw)
     lab = v42_label(np.load(Path(cache) / f"{c}_label.npy"), what)
@@ -403,20 +445,30 @@ def _write42(a):
         if img.is_symlink() or img.exists():
             img.unlink()
         img.symlink_to(src)
-    else:
-        write_nifti(np.asarray(np.load(CACHE_DIR / f"{c}_image.npy", mmap_mode="r"), np.float32), img, np.float32)
+    elif overwrite or not img.exists():   # the harm cache's image is a symlink to the original cache CT
+        _atomic_nifti(np.asarray(np.load(Path(cache) / f"{c}_image.npy", mmap_mode="r"), np.float32), img, np.float32)
     out = raw / "labelsTr" / f"{c}.nii.gz"
-    write_nifti(lab, out, np.uint8)
+    _atomic_nifti(lab, out, np.uint8)     # always rewritten: labels follow the verified cache, never a stale file
     back = np.asarray(nib.load(str(out)).dataobj).transpose(2, 1, 0)
     assert np.array_equal(back, lab), f"{c}: label read-back mismatch"
     return c, [int((lab == v).sum()) for v in range(5)]
+
+
+def _versions():
+    from importlib.metadata import PackageNotFoundError, version
+    out = {}
+    for pkg in ("nnunetv2", "torch", "numpy", "scipy", "scikit-image", "nibabel"):
+        try:
+            out[pkg] = version(pkg)
+        except PackageNotFoundError:
+            out[pkg] = None
+    return out
 
 
 def prep42(args):
     from multiprocessing import Pool
     what = args.what
     did, name = V42[what]
-    cache, harm_sha = harm_cache()
     raw = NNUNET_HOME / "nnUNet_raw" / name
     (raw / "imagesTr").mkdir(parents=True, exist_ok=True)
     (raw / "labelsTr").mkdir(parents=True, exist_ok=True)
@@ -425,11 +477,16 @@ def prep42(args):
         want = set(args.cases.split(","))
         assert not want - set(cases), f"unknown cases: {sorted(want - set(cases))}"
         cases = [c for c in cases if c in want]
-    todo = [c for c in cases if args.overwrite or not (raw / "labelsTr" / f"{c}.nii.gz").exists()]
+        # a smoke subset would rewrite the full dataset's dataset.json / splits_final.json in place
+        extra = sorted({p.name.split("_")[0] for p in (raw / "imagesTr").glob("*.nii.gz")} - want)
+        assert not extra, f"--cases requires an empty/subset raw dir; {name} holds other cases: {extra[:5]}"
+    elif what == "s1":
+        assert (ROOT / "log" / "v4" / "nnprep_540.done").exists(), "Dataset540 is not complete: prep42 --what binY first"
+    cache, harm_sha, digest = harm_cache()
     with Pool(args.np) as p:
-        jobs = [(c, what, str(cache), str(raw)) for c in todo]
+        jobs = [(c, what, str(cache), str(raw), args.overwrite) for c in cases]
         for i, (c, counts) in enumerate(p.imap_unordered(_write42, jobs)):
-            print(f"[{i + 1}/{len(todo)}] {c} voxels per label value {counts}", flush=True)
+            print(f"[{i + 1}/{len(cases)}] {c} voxels per label value {counts}", flush=True)
     labels = ({"background": 0, "Y": 1} if what == "binY"
               else {"background": 0, "c1": 1, "c2": 2, "c3": 3, "c4": 4})
     (raw / "dataset.json").write_text(json.dumps({
@@ -439,7 +496,9 @@ def prep42(args):
                        f"({'binary Y' if what == 'binY' else 'classes 0..4, class 5 -> 0'}), {len(cases)} cases"},
         indent=2))
     (raw / "v42_meta.json").write_text(json.dumps({
-        "what": what, "harm_cache": str(cache), "harm_config_sha256": harm_sha,
+        "what": what, "harm_cache": str(cache), "harm_config_sha256": harm_sha, "harm_label_digest": digest,
+        "harm_built": (cache / "DONE").read_text().strip(),
+        "tool_sha256": hashlib.sha256(Path(__file__).resolve().read_bytes()).hexdigest(), "versions": _versions(),
         "created": datetime.now().isoformat(), "cases": cases}, indent=1))
     pre = NNUNET_HOME / "nnUNet_preprocessed" / name
     pre.mkdir(parents=True, exist_ok=True)
@@ -466,8 +525,25 @@ def prep42(args):
     if not args.cases:
         done = ROOT / "log" / "v4" / f"nnprep_{did}.done"
         done.parent.mkdir(parents=True, exist_ok=True)
-        done.write_text(f"{datetime.now().isoformat()} {name} {HARM_DIR.name} {harm_sha[:12]}\n")
+        done.write_text(f"{datetime.now().isoformat()} {name} {HARM_DIR.name} config {harm_sha[:12]} "
+                        f"labels {digest[:12]}\n")
     print(f"prepared {name}")
+
+
+def _log_run(fd, name, trainer, cmd):
+    """Append what this launch ran with (code, trainer files as installed, dataset labels) to fd/v42_runs.jsonl."""
+    import nnunetv2
+    zz = Path(nnunetv2.__file__).parent / "training" / "nnUNetTrainer" / "variants" / "zz_cnv_v4"
+    meta = json.loads((NNUNET_HOME / "nnUNet_raw" / name / "v42_meta.json").read_text())
+    rec = {"time": datetime.now().isoformat(), "cmd": cmd, "trainer": trainer,
+           "git_head": subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True,
+                                      text=True).stdout.strip(),
+           "trainer_files_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(zz.glob("*.py"))},
+           "dataset": {k: meta.get(k) for k in ("harm_config_sha256", "harm_label_digest", "created")},
+           "versions": _versions()}
+    fd.mkdir(parents=True, exist_ok=True)
+    with open(fd / "v42_runs.jsonl", "a") as f:
+        f.write(json.dumps(rec) + "\n")
 
 
 def train42(args):
@@ -477,16 +553,28 @@ def train42(args):
         trainer = args.trainer or R0_TRAINER
         if args.variant == "report" and trainer != R0_TRAINER:
             raise SystemExit("V4.2 report runs other than R0u wait for the per-fold V4.2 freeze (V4_PLAN §11.6)")
+        if re.match(r"nnUNetTrainerV4_(SMOKE_)?P[abc]", trainer):
+            raise SystemExit(f"{trainer} uses priors; Dataset540 is CT only (prior datasets 542-556 follow Stage 1)")
         if not args.name:
             raise SystemExit("--name is required for binY runs")
+        if args.inner is not None:
+            raise SystemExit("--inner is for Stage 1 (--dataset s1) only")
         split = v42_split_index(what, args.fold, args.variant)
     else:
-        if args.trainer not in (None, R0_TRAINER):
+        if args.trainer not in (None, R0_TRAINER, SMOKE_STOCK):
             raise SystemExit("Stage 1 is the stock nnU-Net trainer (V4_PLAN §10.3)")
-        trainer = R0_TRAINER
+        trainer = args.trainer or R0_TRAINER
         split = v42_split_index(what, args.fold, args.variant, args.inner)
-    stock = trainer == R0_TRAINER
+    stock = not trainer.startswith("nnUNetTrainerV4")     # nnU-Net's own validation/ output (R0u, Stage 1, smoke)
+    splits = json.loads((NNUNET_HOME / "nnUNet_preprocessed" / name / "splits_final.json").read_text())
+    assert split < len(splits) and splits[split]["train"] and splits[split]["val"], \
+        f"{name}: splits_final.json has no usable entry {split}"
+    val = splits[split]["val"]
     fd = results_dir(did, name, trainer, split)
+
+    def missing_npz():
+        return [c for c in val if not (fd / "validation" / f"{c}.npz").exists()]
+
     import fcntl
     pre_folder = NNUNET_HOME / "nnUNet_preprocessed" / name / f"{PLANS}_{CONFIG}"
     with open(pre_folder / ".unpack_lock", "w") as lf:
@@ -501,19 +589,27 @@ def train42(args):
         cmd.append("--npz")             # inner-OOF probabilities of the held-out inner fold (priors a, b, ICP)
     if (fd / "checkpoint_final.pth").exists():
         done = (fd / "validation" / "summary.json").exists() if stock else (fd / "validation_v4" / "DONE").exists()
+        if what == "s1" and missing_npz():
+            done = False                    # validated without --npz (or files lost): validate again with --npz
         cmd = None if done else cmd + ["--val"]
     elif (fd / "checkpoint_latest.pth").exists():
         cmd.append("--c")
     if cmd:
+        _log_run(fd, name, trainer, cmd)
         print(" ".join(cmd), flush=True)
         subprocess.run(cmd, env=env(), check=True)
     if what == "binY":
         export42(args, fd, stock)
-    else:
-        mark = ROOT / "log" / "v4" / f"s142_{args.variant}_f{args.fold}_i{args.inner}.done"
-        mark.parent.mkdir(parents=True, exist_ok=True)
-        mark.write_text(f"{datetime.now().isoformat()} {fd}\n")
-        print(f"Stage 1 {args.variant} fold {args.fold} inner {args.inner} done: {fd}")
+        return
+    miss = missing_npz()
+    assert not miss, f"{fd}: no Stage 1 probabilities (validation/*.npz) for {miss[:5]}"
+    if trainer != R0_TRAINER:               # smoke runs never mark the production queue done
+        print(f"Stage 1 smoke ({trainer}) done, no queue marker: {fd}")
+        return
+    mark = ROOT / "log" / "v4" / f"s142_{args.variant}_f{args.fold}_i{args.inner}.done"
+    mark.parent.mkdir(parents=True, exist_ok=True)
+    mark.write_text(f"{datetime.now().isoformat()} {fd} npz {len(val)}\n")
+    print(f"Stage 1 {args.variant} fold {args.fold} inner {args.inner} done: {fd}")
 
 
 def export42(args, fd, stock):
