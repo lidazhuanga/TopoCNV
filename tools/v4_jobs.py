@@ -8,6 +8,11 @@
   python tools/v4_jobs.py nnprep --folds 0,1 --variant dev --margin 15
   python tools/v4_jobs.py nntrain --folds 0,1 --variant dev --trainer nnUNetTrainerV4_Pabc --name r1p_abc
   python tools/v4_jobs.py list
+V4.2 (V4_PLAN §11; full image, harmonised labels; tools/v4_nnunet.py prep42 / train42):
+  python tools/v4_jobs.py nnprep42 --what42 binY          # Dataset540 (then --what42 s1: Dataset541)
+  python tools/v4_jobs.py nntrain42 --folds 0,1,2,3,4 --variant dev --name v42_r0u                 # stock R0u
+  python tools/v4_jobs.py nntrain42 --folds 0,1,2,3,4 --variant dev --trainer nnUNetTrainerV4_noP_S05 --name v42_s05
+  python tools/v4_jobs.py s1train42 --folds 0,1,2,3,4 --variant dev                                # 3 inner each
 """
 import argparse
 import json
@@ -38,7 +43,8 @@ def add(jobs, job):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("what", choices=["stage1", "priors", "r0dev", "stage2", "nnprep", "nntrain", "list"])
+    ap.add_argument("what", choices=["stage1", "priors", "r0dev", "stage2", "nnprep", "nntrain", "list",
+                                     "nnprep42", "nntrain42", "s1train42"])
     # stage2 = legacy DynUNet appendix path only (V4_PLAN §5); mainline arms are nnprep/nntrain
     ap.add_argument("--folds", default="0,1")
     ap.add_argument("--tier", choices=["report", "dev"], default="report",
@@ -50,6 +56,8 @@ def main():
     ap.add_argument("--shuffle", action="store_true")
     ap.add_argument("--trainer")
     ap.add_argument("--name")
+    ap.add_argument("--what42", dest="what42", choices=["binY", "s1"], default="binY",
+                    help="nnprep42: which V4.2 dataset (540 binY, 541 s1)")
     args = ap.parse_args()
     jobs = load()
     folds = [int(f) for f in args.folds.split(",")]
@@ -57,6 +65,13 @@ def main():
         for j in jobs:
             print(j["key"], "<-", j.get("deps", []))
         return
+    if args.what == "nnprep42":
+        did = {"binY": 540, "s1": 541}[args.what42]
+        add(jobs, {"key": f"nnprep42_{args.what42}", "kind": "cpu",
+                   "deps": ["nnprep42_binY"] if args.what42 == "s1" else [],   # 541 links 540's raw CT
+                   "cmd": [NNPY, "tools/v4_nnunet.py", "prep42", "--what", args.what42],
+                   "done": f"log/v4/nnprep_{did}.done"})
+        folds = []
     for k in folds:
         if args.what == "stage1":
             pfx = "s1_" if args.tier == "report" else "s1dev_"
@@ -103,6 +118,22 @@ def main():
                        "cmd": [NNPY, "tools/v4_nnunet.py", "train", "--fold", str(k), "--variant", args.variant,
                                "--trainer", args.trainer, "--name", args.name] + (["--shuffle"] if args.shuffle else []),
                        "done": out})
+        elif args.what == "nntrain42":
+            if not args.name:
+                raise SystemExit("nntrain42 needs --name (v42_* for dev candidates)")
+            out = (f"results/v4_dev_preds/{args.name}/fold{k}/EXPORTED" if args.variant == "dev"
+                   else f"results/v4_{args.name}_label_predictions/EXPORTED_fold{k}")
+            add(jobs, {"key": f"nn42_{args.name}_{args.variant}_f{k}", "kind": "gpu", "deps": ["nnprep42_binY"],
+                       "cmd": [NNPY, "tools/v4_nnunet.py", "train42", "--dataset", "binY", "--fold", str(k),
+                               "--variant", args.variant, "--name", args.name]
+                              + (["--trainer", args.trainer] if args.trainer else []),
+                       "done": out})
+        elif args.what == "s1train42":
+            for j in range(N_INNER):
+                add(jobs, {"key": f"s142_{args.variant}_f{k}_i{j}", "kind": "gpu", "deps": ["nnprep42_s1"],
+                           "cmd": [NNPY, "tools/v4_nnunet.py", "train42", "--dataset", "s1", "--fold", str(k),
+                                   "--variant", args.variant, "--inner", str(j)],
+                           "done": f"log/v4/s142_{args.variant}_f{k}_i{j}.done"})
         else:
             cfg = load_config(ROOT / args.config)
             add(jobs, {"key": f"{cfg['name']}_f{k}", "kind": "gpu", "resume_arg": "--resume",

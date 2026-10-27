@@ -18,6 +18,14 @@ augmented Y patch, soft recall, all deep-supervision levels).
 
 perform_actual_validation writes validation_v4/{case}.npz (Y and visibility labels on the ROI-crop grid,
 nnU-Net's nonzero crop reverted); tools/v4_nnunet.py export pastes them into the full volume.
+
+V4.2 (V4_PLAN §11) reuses these trainers unchanged on full-image datasets with binary harmonised labels
+(Dataset540: CT only, labels 0/1; the 4-channel prior datasets follow the same layout):
+  * Y = label 1, sampling and loss as above.
+  * With one input channel, the CT-only intensity wrapper and the prior zeroing are no-ops.
+  * validation_v4 Y is already the full volume.
+  * With SKEL_W = 0 and no priors, the loss equals the stock DC_and_CE (tests/test_v4_nnunet.py), so B differs
+    from R0u (stock nnUNetTrainer_300epochs) only by Skeleton Recall.
 """
 import os
 from typing import List
@@ -390,6 +398,13 @@ for _combo in ("abc", "bc", "ac", "ab", "a", "b", "c"):
 for _c5, _t in (("background", "bg"), ("ignore", "ign")):
     for _w, _wt in ((0.5, "05"), (1.0, "10")):
         _arm(f"nnUNetTrainerV4_noP_V{_t}_S{_wt}", priors=(), vis=_c5, skel_w=_w)
+# V4.2 (V4_PLAN §11.6), full image. D4' on R0u: S0 = stock nnUNetTrainer_300epochs, S0.5 / S1.0 = noP_S*.
+# D2' on B(w*): B, or P{combo} with the same w (P{combo} alone is the w* = 0 case).
+for _w, _wt in ((0.5, "05"), (1.0, "10")):
+    _arm(f"nnUNetTrainerV4_noP_S{_wt}", skel_w=_w)
+    for _combo in ("abc", "bc", "ac", "ab"):
+        _arm(f"nnUNetTrainerV4_P{_combo}_S{_wt}", priors=tuple(_combo), skel_w=_w)
 # smoke test only (2 epochs x 5 iterations): tests/v4_nnunet_smoke.sh
 _arm("nnUNetTrainerV4_SMOKE_Pabc_Vign_S10", priors=tuple("abc"), vis="ignore", skel_w=1.0, smoke=True)
 _arm("nnUNetTrainerV4_SMOKE_R1", smoke=True)
+_arm("nnUNetTrainerV4_SMOKE_noP_S10", skel_w=1.0, smoke=True)

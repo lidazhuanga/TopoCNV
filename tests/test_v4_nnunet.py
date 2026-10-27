@@ -94,6 +94,27 @@ class TestV4nnUNet(unittest.TestCase):
         self.assertEqual(T.nnUNetTrainerV4_R1.PRIORS, ())
         self.assertEqual(T.nnUNetTrainerV4_noP_Vbg_S10.PRIORS, ())
 
+    def test_v42_arms(self):
+        """V4.2 candidates (V4_PLAN §11.6): no visibility head, 2 outputs, priors and S weight from the name."""
+        for wt, w in (("05", 0.5), ("10", 1.0)):
+            b = getattr(T, f"nnUNetTrainerV4_noP_S{wt}")
+            self.assertEqual((b.PRIORS, b.VIS, b.SKEL_W, b.N_OUT), ((), None, w, 2))
+            for combo in ("abc", "bc", "ac", "ab"):
+                m = getattr(T, f"nnUNetTrainerV4_P{combo}_S{wt}")
+                self.assertEqual((m.PRIORS, m.VIS, m.SKEL_W, m.N_OUT), (tuple(combo), None, w, 2))
+        self.assertEqual(T.nnUNetTrainerV4_Pbc.SKEL_W, 0.0)       # the w* = 0 member of D2'
+        s = T.nnUNetTrainerV4_SMOKE_noP_S10
+        self.assertEqual((s.PRIORS, s.VIS, s.SKEL_W), ((), None, 1.0))
+
+    def test_binary_labels_equal_stock(self):
+        """On the binary Dataset540 (labels 0/1) the S0 loss is exactly the stock DC_and_CE on Y = label 1."""
+        tg = [(t % 2).to(t.dtype) for t in targets()]
+        out = outputs(2)
+        ref = DeepSupervisionWrapper(DC_and_CE_loss({"batch_dice": True, "smooth": 1e-5, "do_bg": False, "ddp": False},
+                                                    {}, weight_ce=1, weight_dice=1, ignore_label=None,
+                                                    dice_class=MemoryEfficientSoftDiceLoss), W)
+        self.assertAlmostEqual(ref(out, tg).item(), T.V4Loss(W, True)(out, tg).item(), places=5)
+
 
 class TestChannel0Only(unittest.TestCase):
     """Production convention (nnUNetDataLoader3D.generate_train_batch): transforms are called
