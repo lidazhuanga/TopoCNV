@@ -14,6 +14,7 @@
 | 2026-10-24 | **开发/报告改为 nested CV**：D1–D4 在每个外层折 k 的 T_k−V_k 内独立完成，报告阶段用该折冻结的配置（configs/v4_frozen/fold{k}.json，train --variant report 以此门控）；开发期 Stage 1 单独一套（tier=dev，内层折只分 T_k−V_k，V_k 由三模型 ensemble 预测） | kimi k3.1-pro 审查（~/cnv/v4_kimi_review_final_20261024.md）P0-1/P0-2：同一套五折既调参又报告、开发期 Stage 1 未嵌套；用户 2026-10-24 决定采用 nested CV |
 | 2026-10-27 | **V4.2 草案（V4-AM-20261027-02，见 §11）**。<br>• 放弃 ROI 裁剪级联，Stage 2 改为全图。<br>• 参考标准厚度统一（harm_v1，t = 0.19；规则和 t 在草案时已冻结，方向待确认）。<br>• Skeleton Recall 并入基线。<br>• 图谱-ICP 改作先验配准引擎。<br>• D2′ 候选含 B | • r0_dev 只有 0.04% 的 FP 在 ROI 外。<br>• 45 例薄标注（CT 日期 2024-12 至 2025-09）是 Dice 偏低的主因。<br>详见 §11.1 |
 | 2026-10-27 | **V4.2 确认（用户，主会话转达）**。<br>• 确认按薄 → 厚统一（harm_v1，t = 0.19），记录在 `configs/v4_harm/harm_v1_direction.json`。<br>• §11 状态改为已确认。<br>• 第 0 步完成后按 V4.2 放开生产队列，先跑开发阶段；R0u 在统一后的标签上重训。<br>• 开发阶段选择定下来、准备冻结配置时，先向主会话汇报，确认后才进入报告阶段 | 用户原话："确认按薄→厚统一（harm_v1，t=0.19），可以放开 v4 生产队列。" |
+| 2026-10-27 | **选择器规则写定（§11.6.1）与先验构建细节（§11.6.2）**。在任何 D4′、D2′ 结果出来之前提交，之后不改 | 主会话要求：选择器规则在看到任何 D2′ 结果之前写进 V4_PLAN 并提交 |
 
 ## 0. 已查到的事实
 
@@ -430,6 +431,53 @@ CT ──→ Stage 1（§10.3 规格：nnU-Net 5 类，嵌套；在统一标签�
    - HD95 不参与选择。
 3. **选择器校验：** 沿用 §10.6 第 6 条的硬校验，另加 harm_v1 配置哈希和缓存哈希。§10.6 第 1 条"参照不得进入候选集"改为：R0u 在 D4′ 作为 S0 候选，B 在 D2′ 作为无先验候选。
 4. **冻结配置** = m_k + P*_k + w*_k，P*_k 可以为空。
+
+#### 11.6.1 选择器规则（2026-10-27 写定，早于任何 D4′、D2′ 结果；之后不改）
+
+实现：`tools/v4_select42.py`。每折两步、两个 manifest：先 D4′（`results/v4_select42/fold{k}/d4.json`），再 D2′（`results/v4_select42/fold{k}/d2.json`）。两份都是 write-once：重跑必须得到相同的选择和数字，否则中止。
+
+**分数**
+- 每个候选在 V_k 上的逐例 Dice_Y，来自 `tools/v4_dev_summary.py score --gt harm_v1`（`eval_protocol_metrics.py --pred_binary_Y`，统一后的 GT）。空预测按评价器给出的 Dice（0）计入。
+- 候选分数 = V_k 全部病例 Dice_Y 的算术平均，float64，不取整。
+
+**规则（D4′ 和 D2′ 相同）**
+1. best = 各候选分数的最大值。
+2. 合格集 = 满足 best − 分数 < 0.003 的候选（严格小于，正好差 0.003 不算）。
+3. 在合格集里取简单性等级最低的。
+4. 同一等级里取分数最高的。
+5. 分数仍完全相同，按下表的固定顺序取靠前的。
+6. HD95、SurfDice 等其他指标只记录，不参与选择。
+
+| 步 | 候选 | 简单性等级 | 固定顺序 |
+|---|---|---|---|
+| D4′ | S0 = `v42_r0u`，S0.5 = `v42_s05`，S1.0 = `v42_s10` | S0 = 0，S0.5 = 1，S1.0 = 2 | S0, S0.5, S1.0 |
+| D2′ | B = D4′ 胜者本身（复用它在 V_k 上的预测，不重训）；`v42_d2ab`、`v42_d2ac`、`v42_d2bc`、`v42_d2abc` | B = 0，双通道 = 1，abc = 2 | B, ab, ac, bc, abc |
+
+- D2′ 先验臂的 trainer 由 w*_k 决定：S0 → `nnUNetTrainerV4_P{组合}`，S0.5 → `nnUNetTrainerV4_P{组合}_S05`，S1.0 → `nnUNetTrainerV4_P{组合}_S10`。
+- 先验臂在 V_k 上的推理按 §11.4 第 3 条：每例用 3 个 dev 内层 Stage 1 模型各生成一份先验，Stage 2 对每份推理一次，3 份 p_Y 取算术平均，> 0.5 为 Y。
+
+**硬校验**（任一项不过就中止，不给结果）
+1. 协议：manifest 记录 `V4.2 / V4-AM-20261027-02`；harm_v1 确认记录、harm_v1.json 的 sha256 和标签摘要与缓存一致；评价目录的 GT.json 标明 harm_v1。
+2. 候选集合恰为上表，不多不少。R0u 只能作为 D4′ 的 S0，B 只能作为 D2′ 的无先验候选。
+3. 角色：每个候选运行记录（`v42_runs.jsonl`）里的 trainer、数据集和 split 与上表一致；D2′ 先验臂的 w 等于 d4.json 选出的 w*_k。
+4. 病例：训练集恰为 T_k − V_k；验证集恰为 V_k（先验臂为 V_k 的 3 份副本）；预测目录和 CSV 恰为 V_k，每例 Dice_Y 都是有限数。
+5. 完整性：每个候选都有 EXPORTED（不是 EXPORTED_PARTIAL）和 checkpoint_final。
+6. m、P、w：D2′ 数据集元数据里记录的 D1-AM2 配置（`configs/v4_qc42/fold{k}.json`）sha256 与现文件一致，m_k 取自该文件。
+7. Stage 1 与先验哈希：先验目录记录了所用 Stage 1 概率文件和检查点的 sha256；数据集元数据里的先验摘要与先验目录一致。
+8. 结果哈希：manifest 记录每个候选 CSV 和预测文件的 sha256；d2.json 记录 d4.json 的 sha256。
+
+**之后**：d2.json 给出本折的建议配置 m_k + P*_k + w*_k（P*_k 可以为空）。五折都出来后先向主会话汇报，确认后才用 `tools/v4_select42.py freeze` 写 `configs/v4_frozen42/fold{k}.json`，然后才排报告阶段。
+
+#### 11.6.2 先验构建的实现细节（D1-AM2，沿用 D1-AM1 的做法）
+
+1. **Stage 1 输入**：训练病例（T_k − V_k）用把它留出的那个内层模型的 `validation/{case}.npz`（inner-OOF）。V_k 不在任何 dev Stage 1 的训练或验证里，所以每个内层模型另外对 V_k 推理一次（`v4_nnunet.py predict42`，读预处理后的数据，滑窗设置与 nnU-Net 验证相同），概率存 `holdout42/{case}.npz`。
+2. **c4 与路标**：对 5 类概率取 argmax。路标 = argmax ∈ {1, 4}，c4 = argmax = 4，与 V4.0 相同；按中线分侧、聚类清洁（`trainer/v4/roi.py`，参数不变）。先验 a = p_1 + p_2 + p_3 + p_4。
+3. **图谱**：用 T_k − V_k 的统一后标签建图谱，模板选取与 ICP 不变；训练病例用留一图谱。
+4. **D1-AM2 冻结**（`configs/v4_qc42/fold{k}.json`，write-once）：只用 T_k − V_k 的 inner-OOF 结果。
+   - m_k：未回退图谱 ROI 对统一后 GT Y 的最低覆盖率 ≥ 99% 的最小 m ∈ {15, 25, 35}；没有就取 35。
+   - D 门：L_k = Q1 − 3·IQR，U_k = Q3 + 3·IQR（线性分位）。结构失败与 D 越界的判定同 §6.1 第 2 条。
+5. **先验支撑区**：两侧图谱支撑区外接框各外扩 m_k 后的并集（逐体素掩膜，不取总外接框）。支撑区外三个通道都是 0。回退病例三个通道全为 0，CT 不变。
+6. **数据集**：Dataset542–546 = dev 第 k 折（训练 T_k − V_k；验证为 V_k 的 3 份副本，病例名 `{case}_j{j}`）。547–551 留给报告层，552–556 留给报告层打乱先验臂，冻结确认后再建。CT 和标签链接到 Dataset540。
 
 ### 11.7 执行门与预算
 
