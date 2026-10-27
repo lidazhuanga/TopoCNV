@@ -113,6 +113,19 @@ class TestV4nnUNet(unittest.TestCase):
         self.assertTrue(issubclass(T.nnUNetTrainer_SMOKE_2x5, T.nnUNetTrainer))
         self.assertFalse(issubclass(T.nnUNetTrainer_SMOKE_2x5, T.nnUNetTrainerV4))   # stock output paths
 
+    def test_trainer_class_resolution(self):
+        """train42 takes the stock vs V4 output path from the class nnU-Net resolves, not from the name."""
+        import importlib.util
+        root = Path(__file__).resolve().parents[1]
+        spec = importlib.util.spec_from_file_location("v4_nnunet_tool", root / "tools" / "v4_nnunet.py")
+        N = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(N)
+        self.assertTrue(N.is_v4(N.trainer_class("nnUNetTrainerV4_noP_S05")))
+        for stock in (N.R0_TRAINER, N.SMOKE_STOCK):
+            self.assertFalse(N.is_v4(N.trainer_class(stock)), stock)
+        with self.assertRaises(SystemExit):
+            N.trainer_class("nnUNetTrainerV4_noSuchArm")
+
     def test_binary_labels_equal_stock(self):
         """On the binary Dataset540 (labels 0/1) the S0 loss is exactly the stock DC_and_CE on Y = label 1."""
         tg = [(t % 2).to(t.dtype) for t in targets()]

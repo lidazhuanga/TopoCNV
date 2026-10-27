@@ -19,6 +19,34 @@ sys.modules["v4_nnunet"] = N            # Pool workers (harm_cache) pickle its f
 _spec.loader.exec_module(N)
 
 
+class GuardPassed(Exception):
+    pass
+
+
+def _sentinel(*a, **k):
+    raise GuardPassed("a guard let the call through")
+
+
+def _fake_harm(d):
+    """A tiny harm cache in d (154 one-voxel-column labels, manifest, DONE) and its config; returns
+    (cache, config path, manifest). The config records the real rule-code sha256, as calibration does."""
+    import hashlib
+    import json
+    cache = d / N.CACHE_DIR.name
+    cache.mkdir()
+    rule = hashlib.sha256((ROOT / "trainer" / "v4" / "harmonize.py").read_bytes()).hexdigest()
+    cfg = d / "harm.json"
+    cfg.write_text(json.dumps({"t": 0.19, "code_sha256": {"trainer/v4/harmonize.py": rule}}))
+    man = {"config_sha256": hashlib.sha256(cfg.read_bytes()).hexdigest(), "cases": {}}
+    for i, c in enumerate(all_cases()):
+        lab = np.full((1, 2, 2), i % 6, np.uint8)
+        np.save(cache / f"{c}_label.npy", lab)
+        man["cases"][c] = {"sha256_label": hashlib.sha256(lab.tobytes()).hexdigest()}
+    (cache / "manifest.json").write_text(json.dumps(man))
+    (cache / "DONE").write_text("t\n")
+    return cache, cfg, man
+
+
 class TestV42(unittest.TestCase):
     def test_labels(self):
         lab = np.arange(6, dtype=np.uint8).reshape(1, 2, 3)
@@ -70,36 +98,80 @@ class TestV42(unittest.TestCase):
 
     def test_train42_guards(self):
         """Refused before anything runs: prior arms on CT-only Dataset540, --inner on binY, V4 report runs,
-        non-stock Stage 1 trainers, folds / inner folds outside the split tables."""
+        non-stock Stage 1 trainers, folds / inner folds outside the split tables. Should a guard break, the
+        sentinels stop the call at the dataset check, before any write or launch."""
         base = dict(dataset="binY", fold=0, variant="dev", trainer=None, name="x", inner=None, cases="")
-        for kw in (dict(trainer="nnUNetTrainerV4_Pabc_S05"), dict(trainer="nnUNetTrainerV4_SMOKE_Pabc_Vign_S10"),
-                   dict(inner=0), dict(variant="report", trainer="nnUNetTrainerV4_noP_S05"),
-                   dict(dataset="s1", inner=0, trainer="nnUNetTrainerV4_noP_S05")):
-            with self.assertRaises(SystemExit, msg=kw):
-                N.train42(SimpleNamespace(**{**base, **kw}))
-        for kw in (dict(fold=5), dict(fold=-1), dict(dataset="s1", inner=3), dict(dataset="s1")):
-            with self.assertRaises(AssertionError, msg=kw):
-                N.train42(SimpleNamespace(**{**base, **kw}))
+        old = N.check_dataset42, N.subprocess.run, N.NNUNET_HOME
+        with tempfile.TemporaryDirectory() as d:
+            N.check_dataset42, N.subprocess.run, N.NNUNET_HOME = _sentinel, _sentinel, Path(d)
+            try:
+                for kw in (dict(trainer="nnUNetTrainerV4_Pabc_S05"),
+                           dict(trainer="nnUNetTrainerV4_SMOKE_Pabc_Vign_S10"), dict(inner=0),
+                           dict(variant="report", trainer="nnUNetTrainerV4_noP_S05"),
+                           dict(dataset="s1", inner=0, trainer="nnUNetTrainerV4_noP_S05")):
+                    with self.assertRaises(SystemExit, msg=kw):
+                        N.train42(SimpleNamespace(**{**base, **kw}))
+                for kw in (dict(fold=5), dict(fold=-1), dict(dataset="s1", inner=3), dict(dataset="s1")):
+                    with self.assertRaises(AssertionError, msg=kw):
+                        N.train42(SimpleNamespace(**{**base, **kw}))
+                with self.assertRaises(GuardPassed):       # a valid request reaches the dataset check first
+                    N.train42(SimpleNamespace(**base))
+            finally:
+                N.check_dataset42, N.subprocess.run, N.NNUNET_HOME = old
+
+    def test_check_dataset42(self):
+        """Training needs the user's direction record for exactly this cache and a dataset built from it."""
+        import json
+        old = N.HARM_DIR, N.HARM_CFG, N.HARM_DIRECTION, N.NNUNET_HOME
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            _, cfg, _ = _fake_harm(d)
+            N.HARM_DIR, N.HARM_CFG, N.HARM_DIRECTION, N.NNUNET_HOME = d, cfg, d / "direction.json", d / "home"
+            try:
+                _, sha, digest = N.harm_cache(verify=False)
+                name = N.V42["binY"][1]
+                meta = d / "home" / "nnUNet_raw" / name / "v42_meta.json"
+                meta.parent.mkdir(parents=True)
+                meta.write_text(json.dumps({"harm_config_sha256": sha, "harm_label_digest": digest}))
+                with self.assertRaises(SystemExit):                       # no direction record
+                    N.check_dataset42(name)
+                rec = {"status": "confirmed", "harm_config_sha256": sha, "harm_label_digest": digest}
+                N.HARM_DIRECTION.write_text(json.dumps(rec))
+                self.assertEqual(N.check_dataset42(name)["harm_label_digest"], digest)
+                N.HARM_DIRECTION.write_text(json.dumps({**rec, "status": "draft"}))
+                with self.assertRaises(AssertionError):
+                    N.check_dataset42(name)
+                N.HARM_DIRECTION.write_text(json.dumps({**rec, "harm_label_digest": "0" * 64}))
+                with self.assertRaises(AssertionError):                   # confirms another cache
+                    N.check_dataset42(name)
+                N.HARM_DIRECTION.write_text(json.dumps(rec))
+                meta.write_text(json.dumps({"harm_config_sha256": sha, "harm_label_digest": "0" * 64}))
+                with self.assertRaises(AssertionError):                   # dataset built from other labels
+                    N.check_dataset42(name)
+            finally:
+                N.HARM_DIR, N.HARM_CFG, N.HARM_DIRECTION, N.NNUNET_HOME = old
+
+    def test_npz_ok(self):
+        """Stage 1 completion needs readable probabilities of shape (5, *cache shape), checked from the header."""
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            np.savez_compressed(d / "c.npz", probabilities=np.zeros((5, 2, 3, 4), np.float32))
+            self.assertTrue(N._npz_ok(d / "c.npz", (2, 3, 4), 5))
+            self.assertFalse(N._npz_ok(d / "c.npz", (2, 3, 5), 5))
+            self.assertFalse(N._npz_ok(d / "c.npz", (2, 3, 4), 6))
+            self.assertFalse(N._npz_ok(d / "missing.npz", (2, 3, 4), 5))
+            (d / "cut.npz").write_bytes((d / "c.npz").read_bytes()[:100])          # interrupted write
+            self.assertFalse(N._npz_ok(d / "cut.npz", (2, 3, 4), 5))
+            np.savez_compressed(d / "seg.npz", seg=np.zeros((2, 3, 4)))
+            self.assertFalse(N._npz_ok(d / "seg.npz", (2, 3, 4), 5))
 
     def test_harm_cache_checks(self):
         """harm_cache verifies config sha, rule-code sha and every label array against the manifest."""
         import hashlib
-        import json
         old = N.HARM_DIR, N.HARM_CFG
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
-            cache = d / N.CACHE_DIR.name
-            cache.mkdir()
-            rule = hashlib.sha256((ROOT / "trainer" / "v4" / "harmonize.py").read_bytes()).hexdigest()
-            cfg = d / "harm.json"
-            cfg.write_text(json.dumps({"t": 0.19, "code_sha256": {"trainer/v4/harmonize.py": rule}}))
-            man = {"config_sha256": hashlib.sha256(cfg.read_bytes()).hexdigest(), "cases": {}}
-            for i, c in enumerate(all_cases()):
-                lab = np.full((1, 2, 2), i % 6, np.uint8)
-                np.save(cache / f"{c}_label.npy", lab)
-                man["cases"][c] = {"sha256_label": hashlib.sha256(lab.tobytes()).hexdigest()}
-            (cache / "manifest.json").write_text(json.dumps(man))
-            (cache / "DONE").write_text("t\n")
+            cache, cfg, man = _fake_harm(d)
             N.HARM_DIR, N.HARM_CFG = d, cfg
             try:
                 got, sha, digest = N.harm_cache()
@@ -119,9 +191,9 @@ class TestV42(unittest.TestCase):
 
     def test_prep42_cases_guard(self):
         """--cases must refuse a raw dir that already holds other cases (it would rewrite their splits)."""
-        old = N.NNUNET_HOME
+        old = N.NNUNET_HOME, N.harm_cache, N.subprocess.run
         with tempfile.TemporaryDirectory() as d:
-            N.NNUNET_HOME = Path(d)
+            N.NNUNET_HOME, N.harm_cache, N.subprocess.run = Path(d), _sentinel, _sentinel
             try:
                 img = Path(d) / "nnUNet_raw" / N.V42["binY"][1] / "imagesTr"
                 img.mkdir(parents=True)
@@ -131,7 +203,7 @@ class TestV42(unittest.TestCase):
                     N.prep42(SimpleNamespace(what="binY", cases=c0, overwrite=False, np=1))
                 self.assertFalse((img.parent / "dataset.json").exists())
             finally:
-                N.NNUNET_HOME = old
+                N.NNUNET_HOME, N.harm_cache, N.subprocess.run = old
 
     def test_export42_roundtrip(self):
         """export42 writes the cache (z, LR, AP) grid from both validation formats: nnU-Net's NIfTI (stored
@@ -158,8 +230,11 @@ class TestV42(unittest.TestCase):
                 np.savez_compressed(fd / "validation_v4" / f"{c}.npz", Y=y)
                 for stock, name in ((True, "stock"), (False, "v4")):
                     N.export42(SimpleNamespace(fold=0, variant="dev", cases=c, name=name), fd, stock)
-                    got, _ = nrrd.read(str(N.RESULTS / "v4_dev_preds" / name / "fold0" / f"{c}_stage2_label.nrrd"))
+                    out = N.RESULTS / "v4_dev_preds" / name / "fold0"
+                    got, _ = nrrd.read(str(out / f"{c}_stage2_label.nrrd"))
                     np.testing.assert_array_equal(got, y)
+                    self.assertTrue((out / "EXPORTED_PARTIAL").exists())   # a case subset never satisfies
+                    self.assertFalse((out / "EXPORTED").exists())          # the queue or the dev summary
             finally:
                 N.RESULTS = old
 

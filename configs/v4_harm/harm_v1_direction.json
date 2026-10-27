@@ -1,0 +1,14 @@
+{
+ "version": "harm_v1",
+ "amendment": "V4-AM-20261027-02",
+ "status": "confirmed",
+ "direction": "thin -> thick: in-plane sub-voxel resampling of the 45 thin-label cases (t = 0.19), original voxels unchanged (V4_PLAN §11.3)",
+ "confirmed_by": "user, quoted by the main session local_7a1ccbdc-ca13-4dfa-b7d9-42cd77775f9d",
+ "quote": "确认按薄→厚统一（harm_v1，t=0.19），可以放开 v4 生产队列。",
+ "date": "2026-10-27",
+ "harm_config": "configs/v4_harm/harm_v1.json",
+ "harm_config_sha256": "1ef730c305456e70bc9fb0309a5a5afb7681dcd6f0eccf4541ae9fe26981badf",
+ "harm_label_digest": "3a0abb6f98e13b6503830398335b25a30b80a1592e76c430ba643d274f388865",
+ "harm_cache": "results/v4_harm_v1/sp_2.500_1.133_1.133",
+ "note": "harm_v1.json keeps its 'draft' status line on purpose: its sha256 is recorded in the manifest, the Dataset540/541 metadata and the done markers. This file is the confirmation record (V4_PLAN §11.9); train42 refuses to start without it. The physician review / re-contouring alternatives (V4_PLAN §11.10) stay documented and do not block."
+}

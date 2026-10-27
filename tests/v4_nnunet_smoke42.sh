@@ -85,6 +85,9 @@ done
 echo "== [smoke42 5/5] evaluator against harm_v1 =="
 for n in smoke42_v4 smoke42_stock; do
   test -f "results/v4_dev_preds/$n/fold0/${VCASE}_stage2_label.nrrd"
+  # a case subset must leave the queue's done path (EXPORTED) unwritten
+  test -f "results/v4_dev_preds/$n/fold0/EXPORTED_PARTIAL" && test ! -e "results/v4_dev_preds/$n/fold0/EXPORTED" \
+    || { echo "SMOKE42 FAIL: $n wrote the production EXPORTED marker"; exit 1; }
   $PY MIA/scripts/eval_protocol_metrics.py --pred_dir "results/v4_dev_preds/$n/fold0" --gt_cache "$HARM" \
       --pred_binary_Y --no_hu --csv "$SCRATCH/eval_$n.csv" | tail -1
   N=$(awk -F, 'NR>1 && $1!="MEAN"' "$SCRATCH/eval_$n.csv" | wc -l)   # evaluator appends a MEAN row
