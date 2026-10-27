@@ -557,15 +557,22 @@ def prep42(args):
     print(f"prepared {name}")
 
 
-def check_dataset42(name):
-    """Before any V4.2 training: the user's confirmation of the harm_v1 direction names exactly the current
-    cache (V4_PLAN §11.3, §11.9), and the dataset was built from that cache. Returns its v42_meta.json."""
+def check_direction():
+    """The user's confirmation of the harm_v1 direction names exactly the current cache (V4_PLAN §11.3, §11.9).
+    Returns (config sha256, label digest)."""
     _, sha, digest = harm_cache(verify=False)
     if not HARM_DIRECTION.exists():
         raise SystemExit(f"{HARM_DIRECTION} missing: the harm_v1 direction is not confirmed (V4_PLAN §11.9)")
     d = json.loads(HARM_DIRECTION.read_text())
     assert d.get("status") == "confirmed" and (d.get("harm_config_sha256"), d.get("harm_label_digest")) == (sha, digest), \
         f"{HARM_DIRECTION} does not confirm the current harm_v1 cache"
+    return sha, digest
+
+
+def check_dataset42(name):
+    """Before any V4.2 training: the harm_v1 direction is confirmed (check_direction) and the dataset was built
+    from that cache. Returns its v42_meta.json."""
+    sha, digest = check_direction()
     meta = json.loads((NNUNET_HOME / "nnUNet_raw" / name / "v42_meta.json").read_text())
     assert (meta.get("harm_config_sha256"), meta.get("harm_label_digest")) == (sha, digest), \
         f"{name} was built from other labels: rebuild it with prep42"
@@ -587,20 +594,24 @@ def is_v4(cls):
     return any(k.__name__ == "nnUNetTrainerV4" for k in cls.__mro__)
 
 
-def _npz_ok(p, shape, n_cls):
-    """validation/<case>.npz is a readable npz whose 'probabilities' header says (n_cls, *shape)."""
+def _npz_shape(p, key):
+    """Shape in the header of array `key` of npz file p, or None if the file or the array is unreadable."""
     import zipfile
     try:
-        with zipfile.ZipFile(p) as zf, zf.open("probabilities.npy") as f:
+        with zipfile.ZipFile(p) as zf, zf.open(f"{key}.npy") as f:
             major, _ = np.lib.format.read_magic(f)
             read = np.lib.format.read_array_header_1_0 if major == 1 else np.lib.format.read_array_header_2_0
-            got = read(f)[0]
-        return tuple(got) == (n_cls,) + tuple(shape)
+            return tuple(read(f)[0])
     except Exception:
-        return False
+        return None
 
 
-def _log_run(fd, trainer, cls, meta, cmd):
+def _npz_ok(p, shape, n_cls):
+    """validation/<case>.npz is a readable npz whose 'probabilities' header says (n_cls, *shape)."""
+    return _npz_shape(p, "probabilities") == (n_cls,) + tuple(shape)
+
+
+def _log_run(fd, trainer, cls, meta, cmd, extra=None):
     """Append what this launch ran with to fd/v42_runs.jsonl: code, the trainer class's files, dataset labels."""
     import inspect
     files = sorted({inspect.getfile(k) for k in cls.__mro__ if k.__module__.startswith("nnunetv2")})
@@ -608,8 +619,9 @@ def _log_run(fd, trainer, cls, meta, cmd):
            "git_head": subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True,
                                       text=True).stdout.strip(),
            "trainer_files_sha256": {f: hashlib.sha256(Path(f).read_bytes()).hexdigest() for f in files},
-           "dataset": {k: meta.get(k) for k in ("harm_config_sha256", "harm_label_digest", "image_digest", "created")},
-           "versions": _versions()}
+           "dataset": {k: meta.get(k) for k in ("harm_config_sha256", "harm_label_digest", "image_digest", "created",
+                                                "priors_digest", "qc42_sha256") if k in meta},
+           "versions": _versions(), **(extra or {})}
     fd.mkdir(parents=True, exist_ok=True)
     with open(fd / "v42_runs.jsonl", "a") as f:
         f.write(json.dumps(rec) + "\n")
@@ -617,6 +629,8 @@ def _log_run(fd, trainer, cls, meta, cmd):
 
 def train42(args):
     what = args.dataset
+    if what == "prior":
+        return train42p(args)
     did, name = V42[what]
     if what == "binY":
         trainer = args.trainer or R0_TRAINER
@@ -713,6 +727,378 @@ def export42(args, fd, stock, trainer="", digest=""):
     print(f"exported {len(cases)} cases -> {out} ({marker.name})")
 
 
+# ---------------- V4.2 prior datasets 542-556 and D2' (V4_PLAN §11.4, §11.6.1-11.6.2) ----------------
+
+PRIORS42 = Path(os.environ.get("V42_PRIORS_DIR", str(RESULTS / "v4_priors42")))   # override: smoke tests
+QC42 = Path(os.environ.get("V42_QC_DIR", str(ROOT / "configs" / "v4_qc42")))   # D1-AM2 freeze, write-once
+SELECT42 = RESULTS / "v4_select42"              # D4' / D2' manifests (tools/v4_select42.py)
+COMBOS = ("ab", "ac", "bc", "abc")
+W_SUFFIX = {"S0": "", "S05": "_S05", "S10": "_S10"}   # D4' choice -> prior trainer name suffix
+
+
+def v42p(fold, variant, shuffle=False):
+    """(id, name) of the 4-channel full-image dataset: 542+k dev, 547+k report, 552+k report with shuffled priors."""
+    assert 0 <= fold < 5 and variant in ("dev", "report") and not (shuffle and variant == "dev"), (fold, variant, shuffle)
+    did = (542 if variant == "dev" else 552 if shuffle else 547) + fold
+    return did, f"Dataset{did}_CNVv42{variant}F{fold}{'shuf' if shuffle else ''}"
+
+
+def copy_id(case, j):
+    """Prior copy j of a held-out case: priors from Stage 1 inner model j (V_PLAN §11.4 point 3)."""
+    return f"{case}_j{j}"
+
+
+def split_copy(i):
+    case, j = i.rsplit("_j", 1)
+    return case, int(j)
+
+
+def holdout_cases(fold, variant):
+    """Cases no Stage 1 inner model of the tier saw: V_k (dev) or report fold k (report)."""
+    return internal_split(fold)[1] if variant == "dev" else report_cases(fold)
+
+
+def stage2_train_cases(fold, variant):
+    return internal_split(fold)[0] if variant == "dev" else train_cases(fold)
+
+
+def s1_dir(fold, variant, inner, trainer=R0_TRAINER):
+    did, name = V42["s1"]
+    split = v42_split_index("s1", fold, variant, inner)
+    return results_dir(did, name, trainer, split), split
+
+
+def prior_sha(prior, bbox):
+    """Content hash of one prior file (array bytes + bbox), independent of the npz container's timestamps."""
+    h = hashlib.sha256(np.ascontiguousarray(prior, np.uint8).tobytes())
+    h.update(json.dumps([list(prior.shape), np.asarray(bbox).astype(int).tolist()]).encode())
+    return h.hexdigest()
+
+
+def _file_sha(p):
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for b in iter(lambda: f.read(1 << 24), b""):
+            h.update(b)
+    return h.hexdigest()
+
+
+def _save_npz(path, **arrays):
+    """np.savez_compressed through a temporary name + rename (no partial file under the final name)."""
+    tmp = path.with_name(f".{path.name}.tmp42")
+    with open(tmp, "wb") as f:
+        np.savez_compressed(f, **arrays)
+    os.replace(tmp, path)
+
+
+def _predict42(fd, split, pre_name, ids, out_dir, kind, device="cuda"):
+    """Sliding-window inference of fd's checkpoint_final on the preprocessed cases `ids`, as nnU-Net's own
+    validation does it (tile step 0.5, Gaussian, mirroring). kind 's1': 'probabilities' (n_cls, *cache shape)
+    through nnU-Net's own convert_predicted_logits_to_segmentation_with_correct_shape, i.e. the format of
+    validation/*.npz written with --npz. kind 'pY': V4 arm, softmax of the Y head on the full volume, after
+    zeroing the prior channels the arm does not use, exactly as nnUNetTrainerV4.perform_actual_validation."""
+    os.environ.setdefault("nnUNet_compile", "f")
+    import torch
+    from nnunetv2.inference.export_prediction import convert_predicted_logits_to_segmentation_with_correct_shape
+    from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
+    from nnunetv2.training.dataloading.nnunet_dataset import nnUNetDataset
+    dev = torch.device(device)
+    pred = nnUNetPredictor(tile_step_size=0.5, use_gaussian=True, use_mirroring=True,
+                           perform_everything_on_device=dev.type == "cuda", device=dev, verbose=False,
+                           verbose_preprocessing=False, allow_tqdm=False)
+    pred.initialize_from_trained_model_folder(str(fd.parent), use_folds=(split,), checkpoint_name="checkpoint_final.pth")
+    cls = trainer_class(pred.trainer_name)
+    assert list(pred.plans_manager.transpose_forward) == [0, 1, 2], "plans transpose the axes: export would differ"
+    zero = []
+    if is_v4(cls):
+        assert kind == "pY", f"{cls.__name__} is a V4 arm: use kind 'pY'"
+        pc = sys.modules[cls.__module__].PRIOR_CHANNELS
+        zero = sorted(c for c in pc.values() if c not in {pc[p] for p in cls.PRIORS})
+    else:
+        assert kind == "s1", f"{cls.__name__} is stock: use kind 's1'"
+    pre_folder = NNUNET_HOME / "nnUNet_preprocessed" / pre_name / f"{PLANS}_{CONFIG}"
+    ds = nnUNetDataset(str(pre_folder), case_identifiers=list(ids), num_images_properties_loading_threshold=0)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    key = "probabilities" if kind == "s1" else "pY"
+    for n, i in enumerate(ids):
+        out = out_dir / f"{i}.npz"
+        data, _, props = ds.load_case(i)
+        full = tuple(int(s) for s in props["shape_before_cropping"])
+        want = ((pred.label_manager.num_segmentation_heads,) if kind == "s1" else ()) + full
+        if _npz_shape(out, key) == want:
+            continue                                 # resumed: this case is already written
+        x = torch.from_numpy(np.asarray(data, dtype=np.float32))
+        if zero and x.shape[0] > max(zero):
+            x = x.clone()
+            x[zero] = 0
+        logits = pred.predict_logits_from_preprocessed_data(x)
+        if kind == "s1":
+            _, probs = convert_predicted_logits_to_segmentation_with_correct_shape(
+                logits, pred.plans_manager, pred.configuration_manager, pred.label_manager, props,
+                return_probabilities=True)
+            _save_npz(out, probabilities=probs)
+        else:
+            y = torch.softmax(logits.float()[:2], 0)[1].numpy()
+            bbox = props["bbox_used_for_cropping"]
+            assert tuple(y.shape) == tuple(b - a for a, b in bbox), (i, y.shape, bbox)   # no resampling
+            p = np.zeros(full, np.float32)
+            p[tuple(slice(a, b) for a, b in bbox)] = y
+            _save_npz(out, pY=p)
+        print(f"[{n + 1}/{len(ids)}] {i} -> {out}", flush=True)
+        del logits
+    return out_dir
+
+
+def predict42(args):
+    """Stage 1 inner model j of fold k on the cases it never saw (V_k or report fold k) -> <fold dir>/holdout42/."""
+    k, v, j = args.fold, args.variant, args.inner
+    if args.dataset != "s1" or j is None:
+        raise SystemExit("predict42 is for Stage 1 (--dataset s1 --inner 0..2)")
+    trainer = args.trainer or R0_TRAINER
+    if trainer not in (R0_TRAINER, SMOKE_STOCK):
+        raise SystemExit("Stage 1 is the stock nnU-Net trainer (V4_PLAN §10.3)")
+    name = V42["s1"][1]
+    meta = check_dataset42(name)
+    fd, split = s1_dir(k, v, j, trainer)
+    ckpt = fd / "checkpoint_final.pth"
+    if not ckpt.exists():
+        raise SystemExit(f"{ckpt} missing: Stage 1 {v} fold {k} inner {j} has not finished")
+    cases = list(holdout_cases(k, v))
+    held = set(json.loads((NNUNET_HOME / "nnUNet_preprocessed" / name / "splits_final.json").read_text())[split]["train"])
+    assert not held & set(cases), "a holdout case is in this Stage 1 model's training set"
+    if args.cases:
+        keep = set(args.cases.split(","))
+        cases = [c for c in cases if c in keep]
+        assert cases, "no requested case is a holdout case of this fold/variant"
+    out = _predict42(fd, split, name, cases, fd / "holdout42", "s1", args.device)
+    bad = [c for c in cases if not _npz_ok(out / f"{c}.npz", np.load(CACHE_DIR / f"{c}_label.npy", mmap_mode="r").shape, 5)]
+    assert not bad, f"unusable holdout probabilities: {bad[:5]}"
+    if args.cases or trainer != R0_TRAINER:
+        print(f"Stage 1 holdout prediction ({trainer}, {len(cases)} cases) done, no queue marker: {out}")
+        return
+    mark = ROOT / "log" / "v4" / f"s1p42_{v}_f{k}_i{j}.done"
+    mark.write_text(f"{datetime.now().isoformat()} {out} npz {len(cases)} checkpoint {_file_sha(ckpt)[:12]} "
+                    f"labels {meta['harm_label_digest'][:12]}\n")
+    print(f"Stage 1 {v} fold {k} inner {j}: {len(cases)} holdout cases -> {out}")
+
+
+def _atomic_link(src, dst):
+    tmp = dst.with_name(f".{dst.name}.tmp42")
+    if tmp.is_symlink() or tmp.exists():
+        tmp.unlink()
+    tmp.symlink_to(src)
+    os.replace(tmp, dst)
+
+
+def _write42p(a):
+    i, case, pdir, raw, shuffle, want_sha = a
+    import nibabel as nib
+    raw = Path(raw)
+    src = NNUNET_HOME / "nnUNet_raw" / V42["binY"][1]
+    for s, d in ((src / "imagesTr" / f"{case}_0000.nii.gz", raw / "imagesTr" / f"{i}_0000.nii.gz"),
+                 (src / "labelsTr" / f"{case}.nii.gz", raw / "labelsTr" / f"{i}.nii.gz")):
+        assert s.exists(), f"{s} missing: Dataset540 is not built"
+        _atomic_link(s, d)                       # CT and binary Y exactly as Dataset540
+    with np.load(Path(pdir) / f"{i}_prior.npz") as d:
+        pri, bbox = d["prior"], d["bbox"]
+    assert prior_sha(pri, bbox) == want_sha, f"{i}: prior file differs from the priors DONE record"
+    shape = tuple(np.load(CACHE_DIR / f"{case}_label.npy", mmap_mode="r").shape)
+    box = [[int(lo), int(hi)] for lo, hi in bbox]
+    if pri.size == 0:
+        chans = np.zeros((3,) + shape, np.uint8)          # fallback / no support: all priors zero
+    else:
+        chans = region_from_box(pri, box, [[0, n] for n in shape], full_shape=shape,
+                                shift=case_shift(case, shape) if shuffle else None)
+    for ch in range(3):
+        arr = chans[ch].astype(np.float32) / np.float32(255.0)
+        path = raw / "imagesTr" / f"{i}_{ch + 1:04d}.nii.gz"
+        _atomic_nifti(arr, path, np.float32)
+        back = np.asarray(nib.load(str(path)).dataobj).transpose(2, 1, 0)
+        assert np.array_equal(back, arr), f"{path}: read-back mismatch"
+    return i, [int((chans[ch] > 0).sum()) for ch in range(3)]
+
+
+def prep42p(args):
+    """4-channel full-image dataset (CT + priors a/b/c in [0, 1]) from results/v4_priors42/fold{k}_{variant}."""
+    from multiprocessing import Pool
+    k, variant, shuffle = args.fold, args.variant, args.shuffle
+    if variant != "dev":
+        raise SystemExit("report-tier prior datasets wait for the per-fold V4.2 freeze (V4_PLAN §11.6.1)")
+    did, name = v42p(k, variant, shuffle)
+    pdir = PRIORS42 / f"fold{k}_{variant}"
+    if not (pdir / "DONE").exists():
+        raise SystemExit(f"{pdir}/DONE missing: build the priors first (tools/v4_build_priors42.py)")
+    rec = json.loads((pdir / "DONE").read_text())
+    sha, digest = check_direction()
+    assert (rec["harm_config_sha256"], rec["harm_label_digest"]) == (sha, digest), "priors were built from other labels"
+    assert rec["fold"] == k and rec["variant"] == variant, (rec["fold"], rec["variant"])
+    qc = QC42 / f"fold{k}.json"
+    assert _file_sha(qc) == rec["qc42_sha256"], f"{qc} changed since the priors were built"
+    m540 = check_dataset42(V42["binY"][1])
+    ids = rec["ids"]                               # {id: {"case": ..., "sha": ...}}
+    train = list(stage2_train_cases(k, variant))
+    val = [copy_id(c, j) for c in holdout_cases(k, variant) for j in range(N_INNER)]
+    raw = NNUNET_HOME / "nnUNet_raw" / name
+    order = train + val
+    done = ROOT / "log" / "v4" / f"nnprep_{did}.done"
+    if args.cases:                                 # smoke subsets: these cases (and their copies) only
+        want = set(args.cases.split(","))
+        order = [i for i in order if (split_copy(i)[0] if i in val else i) in want]
+        assert order and all(i in ids for i in order), "case subset is empty or has no priors"
+    else:
+        assert sorted(ids) == sorted(order), "priors DONE does not list exactly the training cases + holdout copies"
+        done.unlink(missing_ok=True)
+    (raw / "imagesTr").mkdir(parents=True, exist_ok=True)
+    (raw / "labelsTr").mkdir(parents=True, exist_ok=True)
+    stale = sorted({p.name[:-len("_0000.nii.gz")] for p in (raw / "imagesTr").glob("*_0000.nii.gz")} - set(order))
+    assert not stale, f"{raw} holds cases outside this build: {stale[:5]}"
+    nz = {}
+    with Pool(args.np) as p:
+        jobs = [(i, ids[i]["case"], str(pdir), str(raw), shuffle, ids[i]["sha"]) for i in order]
+        for n, (i, cnt) in enumerate(p.imap_unordered(_write42p, jobs)):
+            nz[i] = cnt
+            print(f"[{n + 1}/{len(order)}] {i} non-zero prior voxels a/b/c {cnt}", flush=True)
+    _atomic_text(raw / "dataset.json", json.dumps({
+        "channel_names": {"0": "nonorm", "1": "nonorm", "2": "nonorm", "3": "nonorm"},
+        "labels": {"background": 0, "Y": 1}, "numTraining": len(order), "file_ending": ".nii.gz",
+        "overwrite_image_reader_writer": "NibabelIO",
+        "description": f"CN V V4.2 fold {k} {variant}{' shuffled priors' if shuffle else ''}: full-volume cache CT + "
+                       f"priors a/b/c (D1-AM2), binary Y from {HARM_DIR.name}; holdout cases as 3 prior copies"},
+        indent=2))
+    _atomic_text(raw / "v42_meta.json", json.dumps({
+        "what": "prior", "fold": k, "variant": variant, "shuffle": shuffle,
+        "harm_cache": m540["harm_cache"], "harm_config_sha256": sha, "harm_label_digest": digest,
+        "image_digest": m540["image_digest"], "priors_dir": str(pdir), "priors_digest": rec["digest"],
+        "qc42_sha256": rec["qc42_sha256"], "margin": rec["margin"],
+        "tool_sha256": hashlib.sha256(Path(__file__).resolve().read_bytes()).hexdigest(), "versions": _versions(),
+        "created": datetime.now().isoformat(), "ids": order, "nonzero_prior_voxels": nz}, indent=1))
+    pre = NNUNET_HOME / "nnUNet_preprocessed" / name
+    pre.mkdir(parents=True, exist_ok=True)
+    plans = widen_plans(NNUNET_HOME / "nnUNet_preprocessed" / SRC_DATASET / f"{PLANS}.json", name)
+    _atomic_text(pre / f"{PLANS}.json", json.dumps(plans, indent=2))
+    _atomic_text(pre / "dataset.json", (raw / "dataset.json").read_text())
+    keep = set(order)
+    splits = [{"train": [i for i in train if i in keep], "val": [i for i in val if i in keep]}]
+    assert splits[0]["train"] and splits[0]["val"], "empty split"
+    _atomic_text(pre / "splits_final.json", json.dumps(splits, indent=1))
+    subprocess.run([bin_cmd("nnUNetv2_preprocess"), "-d", str(did), "-plans_name", PLANS, "-c", CONFIG,
+                    "-np", str(args.np)], env=env(), check=True)
+    subprocess.run([bin_cmd("nnUNetv2_extract_fingerprint"), "-d", str(did), "-np", str(args.np), "--clean"],
+                   env=env(), check=True)
+    pre_folder = pre / f"{PLANS}_{CONFIG}"
+    subprocess.run([sys.executable, "-c",
+                    "from nnunetv2.training.dataloading.utils import unpack_dataset; "
+                    f"unpack_dataset('{pre_folder}', unpack_segmentation=True, "
+                    f"overwrite_existing=False, num_processes={args.np}, verify_npy=True)"],
+                   env=env(), check=True)
+    if not args.cases:
+        done.write_text(f"{datetime.now().isoformat()} {name} priors {rec['digest'][:12]} "
+                        f"labels {digest[:12]} m {rec['margin']}\n")
+    print(f"prepared {name}")
+
+
+def check_dataset42p(name):
+    """check_dataset42, plus: the priors and the D1-AM2 config are still the ones the dataset was built from."""
+    meta = check_dataset42(name)
+    assert meta.get("what") == "prior", f"{name} is not a prior dataset"
+    rec = json.loads((Path(meta["priors_dir"]) / "DONE").read_text())
+    assert rec["digest"] == meta["priors_digest"], f"{name}: priors changed since the dataset was built"
+    assert _file_sha(QC42 / f"fold{meta['fold']}.json") == meta["qc42_sha256"], f"{name}: D1-AM2 config changed"
+    return meta
+
+
+def d4_choice(fold):
+    """(w*_k, sha256 of d4.json) from fold k's D4' manifest (tools/v4_select42.py d4)."""
+    p = SELECT42 / f"fold{fold}" / "d4.json"
+    if not p.exists():
+        raise SystemExit(f"{p} missing: D2' needs fold {fold}'s D4' selection first (tools/v4_select42.py d4)")
+    d = json.loads(p.read_text())
+    assert d["step"] == "D4'" and d["fold"] == fold and d["chosen"]["w"] in W_SUFFIX, (d["step"], d["fold"])
+    return d["chosen"]["w"], _file_sha(p)
+
+
+def prior_trainer(combo, w):
+    return f"nnUNetTrainerV4_P{combo}{W_SUFFIX[w]}"
+
+
+def train42p(args):
+    """D2' prior arm on Dataset542+k: train, predict the 3 prior copies of every V_k case, average p_Y, export."""
+    k = args.fold
+    if args.variant != "dev":
+        raise SystemExit("report-tier prior runs wait for the per-fold V4.2 freeze (V4_PLAN §11.6.1)")
+    if args.priors not in COMBOS:
+        raise SystemExit(f"--priors must be one of {COMBOS} (D2', V4_PLAN §11.6.1)")
+    if not args.name:
+        raise SystemExit("--name is required (v42_d2<combo> for D2')")
+    did, name = v42p(k, "dev")
+    if args.trainer:
+        if "SMOKE" not in args.trainer:
+            raise SystemExit("production prior trainers follow d4.json; --trainer is for smoke trainers only")
+        trainer, w, d4sha = args.trainer, None, None
+    else:
+        w, d4sha = d4_choice(k)
+        trainer = prior_trainer(args.priors, w)
+    meta = check_dataset42p(name)
+    cls = trainer_class(trainer)
+    assert is_v4(cls) and "".join(sorted(cls.PRIORS)) == args.priors, f"{trainer} does not use priors {args.priors}"
+    split = 0
+    splits = json.loads((NNUNET_HOME / "nnUNet_preprocessed" / name / "splits_final.json").read_text())
+    assert splits[split]["train"] and splits[split]["val"], f"{name}: no usable split entry"
+    val = splits[split]["val"]
+    fd = results_dir(did, name, trainer, split)
+    import fcntl
+    pre_folder = NNUNET_HOME / "nnUNet_preprocessed" / name / f"{PLANS}_{CONFIG}"
+    with open(pre_folder / ".unpack_lock", "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        subprocess.run([sys.executable, "-c",
+                        "from nnunetv2.training.dataloading.utils import unpack_dataset; "
+                        f"unpack_dataset('{pre_folder}', unpack_segmentation=True, "
+                        "overwrite_existing=False, num_processes=8, verify_npy=True)"],
+                       env=env(), check=True)
+    cmd = [bin_cmd("nnUNetv2_train"), str(did), CONFIG, str(split), "-tr", trainer, "-p", PLANS]
+    if (fd / "checkpoint_final.pth").exists():
+        cmd = None if (fd / "validation_v4" / "DONE").exists() else cmd + ["--val"]
+    elif (fd / "checkpoint_latest.pth").exists():
+        cmd.append("--c")
+    if cmd:
+        _log_run(fd, trainer, cls, meta, cmd, extra={"d2": {"priors": args.priors, "w": w, "d4_sha256": d4sha}})
+        print(" ".join(cmd), flush=True)
+        subprocess.run(cmd, env=env(), check=True)
+    _predict42(fd, split, name, val, fd / "pY42", "pY", args.device)
+    export42p(args, fd, trainer, meta, val)
+
+
+def export42p(args, fd, trainer, meta, val):
+    """V_k prediction = mean p_Y over the 3 prior copies > 0.5 (V4_PLAN §11.4 point 3, §11.6.1)."""
+    import nrrd
+    k = args.fold
+    by_case = {}
+    for i in val:
+        by_case.setdefault(split_copy(i)[0], []).append(i)
+    cases = [c for c in holdout_cases(k, "dev") if c in by_case]
+    full = not args.cases and "SMOKE" not in trainer
+    if full:
+        assert sorted(by_case) == sorted(holdout_cases(k, "dev")), "validation copies do not cover V_k"
+        assert all(sorted(split_copy(i)[1] for i in v) == list(range(N_INNER)) for v in by_case.values()), \
+            "every V_k case needs exactly one copy per Stage 1 inner model"
+    out = RESULTS / "v4_dev_preds" / args.name / f"fold{k}"
+    out.mkdir(parents=True, exist_ok=True)
+    for c in cases:
+        shape = np.load(CACHE_DIR / f"{c}_label.npy", mmap_mode="r").shape
+        acc = np.zeros(shape, np.float32)
+        for i in sorted(by_case[c]):
+            p = np.load(fd / "pY42" / f"{i}.npz")["pY"]
+            assert p.shape == shape, (i, p.shape, shape)
+            acc += p
+        pred = (acc / np.float32(len(by_case[c])) > 0.5).astype(np.int16)
+        nrrd.write(str(out / f"{c}_stage2_label.nrrd"), pred, nrrd_header(pred))
+    marker = out / ("EXPORTED" if full else "EXPORTED_PARTIAL")
+    marker.write_text(f"{datetime.now().isoformat()} {len(cases)} cases from {fd} trainer {trainer} "
+                      f"labels {meta['harm_label_digest'][:12]} priors {meta['priors_digest'][:12]} "
+                      f"mean of {N_INNER} prior copies\n")
+    print(f"exported {len(cases)} cases -> {out} ({marker.name})")
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -740,16 +1126,32 @@ def main():
     p42.add_argument("--np", type=int, default=8)
     p42.add_argument("--cases", default="", help="comma list (smoke tests): tiny dataset of these cases only")
     t42 = sub.add_parser("train42")
-    t42.add_argument("--dataset", choices=sorted(V42), required=True)
+    t42.add_argument("--dataset", choices=sorted(V42) + ["prior"], required=True)
     t42.add_argument("--fold", type=int, required=True)
     t42.add_argument("--variant", choices=["dev", "report"], required=True)
     t42.add_argument("--inner", type=int, default=None, help="Stage 1 (s1): inner model 0..2")
-    t42.add_argument("--trainer", default=None, help="binY: default = stock R0u trainer")
-    t42.add_argument("--name", default=None, help="binY: output name (v42_* for dev candidates)")
+    t42.add_argument("--trainer", default=None, help="binY: default = stock R0u trainer; prior: smoke only")
+    t42.add_argument("--name", default=None, help="binY / prior: output name (v42_* for dev candidates)")
+    t42.add_argument("--priors", default=None, help="prior: ab, ac, bc or abc (trainer from d4.json)")
+    t42.add_argument("--device", default="cuda", help="prior: device of the copy inference")
     t42.add_argument("--cases", default="", help="comma list (smoke tests): export only these cases")
+    pr42 = sub.add_parser("predict42")
+    pr42.add_argument("--dataset", choices=["s1"], default="s1")
+    pr42.add_argument("--fold", type=int, required=True)
+    pr42.add_argument("--variant", choices=["dev", "report"], required=True)
+    pr42.add_argument("--inner", type=int, required=True)
+    pr42.add_argument("--trainer", default=None, help="default stock R0u trainer; smoke: nnUNetTrainer_SMOKE_2x5")
+    pr42.add_argument("--device", default="cuda")
+    pr42.add_argument("--cases", default="", help="comma list (tests): these holdout cases only, no marker")
+    pp42 = sub.add_parser("prep42p")
+    pp42.add_argument("--fold", type=int, required=True)
+    pp42.add_argument("--variant", choices=["dev", "report"], default="dev")
+    pp42.add_argument("--shuffle", action="store_true")
+    pp42.add_argument("--np", type=int, default=8)
+    pp42.add_argument("--cases", default="", help="comma list (smoke tests): these cases and their copies only")
     a = ap.parse_args()
     {"install": install, "prep": prep, "prep_r0dev": prep_r0dev, "train": train,
-     "prep42": prep42, "train42": train42}[a.cmd](a)
+     "prep42": prep42, "train42": train42, "predict42": predict42, "prep42p": prep42p}[a.cmd](a)
 
 
 if __name__ == "__main__":
