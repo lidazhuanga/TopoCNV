@@ -228,7 +228,7 @@ class TestJobs(unittest.TestCase):
                           ["nntrain42", "--folds", "0", "--variant", "dev", "--name", "v42_s10",
                            "--trainer", "nnUNetTrainerV4_noP_S10"],
                           ["nntrain42", "--folds", "1", "--variant", "dev", "--name", "v42_r0u"],
-                          ["d2chain42", "--folds", "0"], ["smoke42p", "--after", "s142_dev_f0_i2"],
+                          ["smoke42p", "--after", "s142_dev_f0_i2"], ["d2chain42", "--folds", "0"],
                           ["d2chain42", "--folds", "0"]):                           # idempotent
                     sys.argv = ["v4_jobs.py"] + a
                     J.main()
@@ -240,11 +240,13 @@ class TestJobs(unittest.TestCase):
         self.assertEqual(len(keys), len(set(keys)))
         i = keys.index
         self.assertEqual(keys[i("s142_dev_f0_i2") + 1: i("s142_dev_f0_i2") + 5],
-                         ["s1p42_dev_f0_i0", "s1p42_dev_f0_i1", "s1p42_dev_f0_i2", "smoke42p"])
+                         ["smoke42p", "s1p42_dev_f0_i0", "s1p42_dev_f0_i1", "s1p42_dev_f0_i2"])
+        with self.assertRaises(SystemExit):                       # the chain needs its smoke gate
+            J.d2chain42([], 1)
         self.assertLess(i("smoke42p"), i("nn42_v42_r0u_dev_f0"))
         self.assertGreater(i("nn42_v42_d2ab_dev_f0"), i("nn42_v42_s10_dev_f0"))
         self.assertLess(i("d2sel42_f0"), i("nn42_v42_r0u_dev_f1"))
-        self.assertEqual(by["s1p42_dev_f0_i1"]["deps"], ["s142_dev_f0_i1"])
+        self.assertEqual(by["s1p42_dev_f0_i1"]["deps"], ["s142_dev_f0_i1", "smoke42p"])
         self.assertEqual(set(by["pri42_dev_f0"]["deps"]),
                          {f"s142_dev_f0_i{j}" for j in range(3)} | {f"s1p42_dev_f0_i{j}" for j in range(3)})
         self.assertEqual(set(by["nn42_v42_d2abc_dev_f0"]["deps"]), {"nnprep42p_dev_f0", "d4sel42_f0", "smoke42p"})

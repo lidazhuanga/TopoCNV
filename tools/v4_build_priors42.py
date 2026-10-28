@@ -19,7 +19,7 @@ Outputs results/v4_priors42/fold{k}_dev/: {id}_prior.npz (uint8 'prior' (3, *bbo
 stage1_qc.csv / stage1_qc.json (§10.3 point 6, descriptive, dev cases only), DONE (written last: inputs and their
 sha256, Stage 1 checkpoints, D1-AM2 config sha256, one content hash per prior file, digest).
 
-  python tools/v4_build_priors42.py --fold 0 --workers 24
+  python tools/v4_build_priors42.py --fold 0 --workers 12
 """
 import argparse
 import csv
@@ -56,12 +56,14 @@ ATLAS_SET = None
 INPUTS = None             # {prior id: (case, npz path, inner j)}
 
 
-def load_probs(path):
+def load_probs(path, case):
     raw = Path(path).read_bytes()
     with np.load(io.BytesIO(raw)) as d:
-        p = d["probabilities"]
-    assert p.ndim == 4 and p.shape[0] == 5, (path, p.shape)
-    return np.asarray(p, np.float32), hashlib.sha256(raw).hexdigest()
+        p = np.asarray(d["probabilities"], np.float32)
+    shape = tuple(load_label(case).shape)
+    assert p.shape == (5,) + shape, f"{path}: probabilities {p.shape}, cache grid {shape}"
+    assert np.isfinite(p).all(), f"{path}: non-finite probabilities"
+    return p, hashlib.sha256(raw).hexdigest()
 
 
 def load_image(case):
@@ -159,7 +161,7 @@ def warp_one(case):
 def pass1(i):
     """Everything the D1-AM2 freeze and the gate need, plus the Stage 1 quality numbers."""
     case, path, j = INPUTS[i]
-    p, sha = load_probs(path)
+    p, sha = load_probs(path, case)
     image = load_image(case)
     am, lm, is4 = landmarks(p)
     rec, _, c4 = compute_case_roi(lm, is4, image)
@@ -186,7 +188,7 @@ def pass2(task):
     if not boxes:
         prior, bbox = np.zeros((3, 0, 0, 0), np.uint8), np.zeros((3, 2), np.int64)
     else:
-        p, _ = load_probs(path)
+        p, _ = load_probs(path, case)
         _, lm, is4 = landmarks(p)
         _, _, c4 = compute_case_roi(lm, is4, image)
         box = union_box(boxes)
@@ -252,7 +254,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fold", type=int, required=True)
     ap.add_argument("--variant", choices=["dev", "report"], default="dev")
-    ap.add_argument("--workers", type=int, default=24)
+    ap.add_argument("--workers", type=int, default=12)   # about 1 GB per worker (5-class probabilities)
     a = ap.parse_args()
     k, variant = a.fold, a.variant
     if variant != "dev":
@@ -309,6 +311,7 @@ def main():
     qc_path = N.QC42 / f"fold{k}.json"
     new = write_once(qc_path, cfg, ["amendment", "fold", "margin", "min_cov_at_margin", "rule_feasible", "L", "U",
                                     "per_case_D", "per_case_cov", "stage1_inputs_sha256", "atlas_template",
+                                    "stage1_checkpoints_sha256", "train_triggers",
                                     "harm_config_sha256", "harm_label_digest"])
     qc = json.loads(qc_path.read_text())
     m_k, L, U = int(qc["margin"]), float(qc["L"]), float(qc["U"])

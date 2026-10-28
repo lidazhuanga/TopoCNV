@@ -13,6 +13,7 @@ V4.2 (V4_PLAN §11; full image, harmonised labels; tools/v4_nnunet.py prep42 / t
   python tools/v4_jobs.py nntrain42 --folds 0,1,2,3,4 --variant dev --name v42_r0u                 # stock R0u
   python tools/v4_jobs.py nntrain42 --folds 0,1,2,3,4 --variant dev --trainer nnUNetTrainerV4_noP_S05 --name v42_s05
   python tools/v4_jobs.py s1train42 --folds 0,1,2,3,4 --variant dev                                # 3 inner each
+  python tools/v4_jobs.py smoke42p --after s142_dev_f0_i2   # GPU smoke of the prior path, gates the D2' chain
   python tools/v4_jobs.py d2chain42 --folds 0,1,2,3,4    # Stage 1 holdout prediction -> priors -> Dataset542+k,
                                                          # D4' scores + selection, D2' arms + scores + selection
 Jobs are inserted next to their fold's existing jobs (priority = list order); jobs.json is replaced atomically.
@@ -64,7 +65,10 @@ def save(jobs):
 
 
 def d2chain42(jobs, k):
-    """Fold k's D2' chain (V4_PLAN §11.6.1-11.6.2). GPU jobs follow the queue's GPU rules like every other job."""
+    """Fold k's D2' chain (V4_PLAN §11.6.1-11.6.2). GPU jobs follow the queue's GPU rules like every other job.
+    Needs the smoke42p job (added first by `v4_jobs.py smoke42p`): the whole chain waits for it."""
+    if not any(j["key"] == "smoke42p" for j in jobs):
+        raise SystemExit("add the smoke42p job first (python tools/v4_jobs.py smoke42p --after <key>)")
     ev = "results/v4_dev_eval_harm_v1/{n}/fold%d.csv" % k
 
     def score(name, dep, after):
@@ -74,13 +78,13 @@ def d2chain42(jobs, k):
 
     s1 = [f"s142_dev_f{k}_i{j}" for j in range(N_INNER)]
     for j in range(N_INNER):        # short GPU jobs: right behind the fold's Stage 1 runs
-        add(jobs, {"key": f"s1p42_dev_f{k}_i{j}", "kind": "gpu", "deps": [s1[j]],
+        add(jobs, {"key": f"s1p42_dev_f{k}_i{j}", "kind": "gpu", "deps": [s1[j], "smoke42p"],
                    "cmd": [NNPY, "tools/v4_nnunet.py", "predict42", "--fold", str(k), "--variant", "dev",
                            "--inner", str(j)],
                    "done": f"log/v4/s1p42_dev_f{k}_i{j}.done"}, s1[-1])
     tail = f"nn42_v42_s10_dev_f{k}"         # the fold's last D4' run: the rest of the chain goes behind it
     add(jobs, {"key": f"pri42_dev_f{k}", "kind": "cpu", "deps": s1 + [f"s1p42_dev_f{k}_i{j}" for j in range(N_INNER)],
-               "cmd": [PY, "tools/v4_build_priors42.py", "--fold", str(k), "--workers", "24"],
+               "cmd": [PY, "tools/v4_build_priors42.py", "--fold", str(k), "--workers", "12"],
                "done": f"results/v4_priors42/fold{k}_dev/DONE"}, tail)
     add(jobs, {"key": f"nnprep42p_dev_f{k}", "kind": "cpu", "deps": [f"pri42_dev_f{k}"],
                "cmd": [NNPY, "tools/v4_nnunet.py", "prep42p", "--fold", str(k), "--variant", "dev"],
@@ -137,7 +141,7 @@ def main():
                    "cmd": [NNPY, "tools/v4_nnunet.py", "prep42", "--what", args.what42],
                    "done": f"log/v4/nnprep_{did}.done"})
         folds = []
-    if args.what == "smoke42p":     # GPU smoke of the prior path; gates every D2' training job
+    if args.what == "smoke42p":     # GPU smoke of the prior path; gates the whole D2' chain
         add(jobs, {"key": "smoke42p", "kind": "gpu", "cmd": ["bash", "tests/v4_nnunet_smoke42p.sh", "queue"],
                    "done": "log/v4/smoke42p.done"}, args.after)
         folds = []

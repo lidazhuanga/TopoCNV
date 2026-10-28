@@ -85,8 +85,8 @@ def candidate(k, name, trainer, did, dname, split, train, val, want, extra_check
     """Hard checks 3-5 and 8 for one candidate; returns its manifest entry."""
     pdir = N.RESULTS / "v4_dev_preds" / name / f"fold{k}"
     mk = pdir / "EXPORTED"
-    if not mk.exists():
-        raise SystemExit(f"{name} fold {k}: {mk} missing (EXPORTED_PARTIAL does not count)")
+    if not mk.exists() or (pdir / "EXPORTED_PARTIAL").exists():
+        raise SystemExit(f"{name} fold {k}: needs {mk} and no EXPORTED_PARTIAL next to it")
     m = re.search(r" from (\S+) trainer (\S+)", mk.read_text())
     if not m:
         raise SystemExit(f"{mk}: cannot read the run folder and trainer")
@@ -244,6 +244,11 @@ def d2(k):
 def freeze(folds, confirmed, by):
     if not confirmed.strip():
         raise SystemExit("--confirmed needs the main session's confirmation (V4_PLAN §11.6.1)")
+    if sorted(folds) != [0, 1, 2, 3, 4]:
+        raise SystemExit("freeze all five folds at once, after all five d2.json exist (V4_PLAN §11.6.1)")
+    missing = [k for k in folds if not (N.SELECT42 / f"fold{k}" / "d2.json").exists()]
+    if missing:
+        raise SystemExit(f"d2.json missing for folds {missing}")
     for k in folds:
         p2 = N.SELECT42 / f"fold{k}" / "d2.json"
         if not p2.exists():

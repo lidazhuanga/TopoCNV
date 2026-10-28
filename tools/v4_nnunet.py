@@ -812,14 +812,25 @@ def _predict42(fd, split, pre_name, ids, out_dir, kind, device="cuda"):
     zero = []
     if is_v4(cls):
         assert kind == "pY", f"{cls.__name__} is a V4 arm: use kind 'pY'"
-        pc = sys.modules[cls.__module__].PRIOR_CHANNELS
+        mod = sys.modules[cls.__module__]
+        pc = mod.PRIOR_CHANNELS
         zero = sorted(c for c in pc.values() if c not in {pc[p] for p in cls.PRIORS})
+        # the sliding-window buffer follows label_manager: give it the arm's head count, as its validation does
+        pred.label_manager = mod._NOutLabelManager(pred.label_manager, cls._n_out())
     else:
         assert kind == "s1", f"{cls.__name__} is stock: use kind 's1'"
     pre_folder = NNUNET_HOME / "nnUNet_preprocessed" / pre_name / f"{PLANS}_{CONFIG}"
     ds = nnUNetDataset(str(pre_folder), case_identifiers=list(ids), num_images_properties_loading_threshold=0)
     out_dir.mkdir(parents=True, exist_ok=True)
     key = "probabilities" if kind == "s1" else "pY"
+    # outputs are reused on resume only if they come from this very checkpoint and this tool
+    source = {"checkpoint_sha256": _file_sha(fd / "checkpoint_final.pth"), "kind": kind, "split": split,
+              "tool_sha256": _file_sha(Path(__file__).resolve())}
+    src_file = out_dir / "SOURCE.json"
+    if not src_file.exists() or json.loads(src_file.read_text()) != source:
+        for old in out_dir.glob("*.npz"):
+            old.unlink()
+        _atomic_text(src_file, json.dumps(source, indent=1))
     for n, i in enumerate(ids):
         out = out_dir / f"{i}.npz"
         data, _, props = ds.load_case(i)
@@ -950,7 +961,9 @@ def prep42p(args):
         done.unlink(missing_ok=True)
     (raw / "imagesTr").mkdir(parents=True, exist_ok=True)
     (raw / "labelsTr").mkdir(parents=True, exist_ok=True)
-    stale = sorted({p.name[:-len("_0000.nii.gz")] for p in (raw / "imagesTr").glob("*_0000.nii.gz")} - set(order))
+    have = ({p.name[:-len("_0000.nii.gz")] for p in (raw / "imagesTr").glob("*_000[0-9].nii.gz")}
+            | {p.name[:-len(".nii.gz")] for p in (raw / "labelsTr").glob("*.nii.gz")})
+    stale = sorted(have - set(order))
     assert not stale, f"{raw} holds cases outside this build: {stale[:5]}"
     nz = {}
     with Pool(args.np) as p:
@@ -1083,6 +1096,10 @@ def export42p(args, fd, trainer, meta, val):
             "every V_k case needs exactly one copy per Stage 1 inner model"
     out = RESULTS / "v4_dev_preds" / args.name / f"fold{k}"
     out.mkdir(parents=True, exist_ok=True)
+    if not full and (out / "EXPORTED").exists():
+        raise SystemExit(f"{out} holds a complete export: a partial one must use another --name")
+    for m in ("EXPORTED", "EXPORTED_PARTIAL"):
+        (out / m).unlink(missing_ok=True)       # no marker while the files change
     for c in cases:
         shape = np.load(CACHE_DIR / f"{c}_label.npy", mmap_mode="r").shape
         acc = np.zeros(shape, np.float32)
@@ -1093,9 +1110,9 @@ def export42p(args, fd, trainer, meta, val):
         pred = (acc / np.float32(len(by_case[c])) > 0.5).astype(np.int16)
         nrrd.write(str(out / f"{c}_stage2_label.nrrd"), pred, nrrd_header(pred))
     marker = out / ("EXPORTED" if full else "EXPORTED_PARTIAL")
-    marker.write_text(f"{datetime.now().isoformat()} {len(cases)} cases from {fd} trainer {trainer} "
-                      f"labels {meta['harm_label_digest'][:12]} priors {meta['priors_digest'][:12]} "
-                      f"mean of {N_INNER} prior copies\n")
+    _atomic_text(marker, f"{datetime.now().isoformat()} {len(cases)} cases from {fd} trainer {trainer} "
+                         f"labels {meta['harm_label_digest'][:12]} priors {meta['priors_digest'][:12]} "
+                         f"mean of {N_INNER} prior copies\n")
     print(f"exported {len(cases)} cases -> {out} ({marker.name})")
 
 

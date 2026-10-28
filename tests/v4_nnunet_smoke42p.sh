@@ -6,7 +6,7 @@
 #   2. fake priors (from the GT; values meaningless) -> prep42p: 4-channel Dataset542 with 3 copies of the V_0 case
 #   3. train42 --dataset prior with a smoke prior arm -> validation_v4, p_Y of the 3 copies, export = mean > 0.5
 # No production dataset, marker or prior file is touched; on success writes log/v4/smoke42p.done, the gate of
-# every D2' training job.
+# the D2' chain (Stage 1 holdout prediction onwards).
 #
 #  bash tests/v4_nnunet_smoke42p.sh <gpu_id>      # or 'queue': use the CUDA_VISIBLE_DEVICES the queue set
 set -euo pipefail
@@ -23,11 +23,14 @@ REAL_HOME=$HOME/cnv/nnunet_cnv
 HARM=$PWD/results/v4_harm_v1/sp_2.500_1.133_1.133
 export CNV_NNUNET_HOME=$SCRATCH/nnunet V42_PRIORS_DIR=$SCRATCH/priors42 V42_QC_DIR=$SCRATCH/qc42
 rm -rf "$SCRATCH" results/v4_dev_preds/smoke42p
+rm -f log/v4/smoke42p.done                  # a failed rerun must not leave an earlier pass in place
 mkdir -p "$SCRATCH/nnunet/nnUNet_preprocessed/Dataset501_CNVbinaryY" "$SCRATCH/nnunet/nnUNet_raw" \
          "$SCRATCH/nnunet/nnUNet_results"
 cp "$REAL_HOME/nnUNet_preprocessed/Dataset501_CNVbinaryY/nnUNetPlans.json" \
    "$SCRATCH/nnunet/nnUNet_preprocessed/Dataset501_CNVbinaryY/"
-marks() { ls log/v4/ | grep -E '^(nnprep_54|s142_|s1p42_)' | sort | md5sum; ls results/v4_priors42 configs/v4_qc42 2>/dev/null | md5sum; }
+# production paths only the D2' chain writes; its jobs wait for this smoke, so none may appear while it runs
+# (other queue jobs keep writing their own markers meanwhile, so log/v4 as a whole is not compared)
+marks() { for p in log/v4/s1p42_dev_f0_i0.done log/v4/nnprep_542.done results/v4_priors42/fold0_dev                    configs/v4_qc42/fold0.json results/v4_dev_preds/v42_d2abc; do [ -e "$p" ] && echo "$p"; done; true; }
 MARKS_BEFORE=$(marks)
 
 echo "== [smoke42p 1/5] case list =="
