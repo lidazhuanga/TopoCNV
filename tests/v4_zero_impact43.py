@@ -40,19 +40,20 @@ def trainer(cls_name, dname):
 t0 = trainer(N.R0_TRAINER, N.V42["binY"][1])
 t43 = trainer("nnUNetTrainerV43_MM", M.V43["mm"][1])
 sd0, sd43 = t0.network.state_dict(), t43.network.state_dict()
+n_par0 = sum(p.numel() for p in t0.network.parameters())
+n_par43 = sum(p.numel() for p in t43.network.parameters())
 assert set(sd0) == set(sd43), "the two networks have different layers"
 g = torch.Generator(device="cpu").manual_seed(0)
-diff_keys = []
+diff_keys = [k for k in sd0 if sd0[k].shape != sd43[k].shape]
+# nnU-Net's state_dict lists the first conv under several alias keys (conv.weight, all_modules.0.weight, and the
+# decoder's reference to the encoder): they must all be one tensor
+assert diff_keys and len({sd43[k].data_ptr() for k in diff_keys}) == 1, f"differing keys are not one tensor: {diff_keys}"
+k0 = diff_keys[0]
+assert sd43[k0].shape[1] == 3 and sd0[k0].shape[1] == 1 and sd43[k0].shape[2:] == sd0[k0].shape[2:], k0
+w = torch.randn(sd43[k0].shape, generator=g).to(sd43[k0])
+w[:, :1] = sd0[k0]
 for k in sd0:
-    if sd0[k].shape == sd43[k].shape:
-        sd43[k] = sd0[k].clone()
-    else:
-        diff_keys.append(k)
-        assert sd43[k].shape[1] == 3 and sd0[k].shape[1] == 1 and sd43[k].shape[2:] == sd0[k].shape[2:], k
-        w = torch.randn(sd43[k].shape, generator=g).to(sd43[k])
-        w[:, :1] = sd0[k]
-        sd43[k] = w
-assert len(diff_keys) == 1, f"only the first conv may differ, got {diff_keys}"
+    sd43[k] = w if k in diff_keys else sd0[k].clone()
 t43.network.load_state_dict(sd43)
 t0.network.train()
 t43.network.train()
@@ -72,13 +73,16 @@ with torch.no_grad():
     scale = max(1.0, max(float(o.abs().max()) for o in o0))
     dmax = max(float((a - b).abs().max()) for a, b in zip(o0, o43))
     x3r = x3.clone()
-    x3r[:, 1] = torch.rand_like(x1)
+    x3r[:, 1] = torch.rand_like(x1[:, 0])
     x3r[:, 2] = 1.0
     dmri = max(float((a - b).abs().max()) for a, b in zip(o0, t43.network(t43._mask(x3r))))
-print(f"first conv differs only: {diff_keys[0]}")
+print(f"first conv differs only (one tensor, {len(diff_keys)} alias keys): {k0}")
 print(f"outputs (no MRI): max |V43 - stock| = {dmax:.3e} (output scale {scale:.2f})")
 print(f"loss: stock {l0:.8f}  V43 {l43:.8f}  V43 loss on the stock outputs {l43_same:.8f}  (diff {abs(l43_same - l0):.3e})")
 print(f"with MRI and mask set: max |V43 - stock| = {dmri:.3e}")
+w0 = next(p for p in t0.network.parameters() if p.ndim == 5)
+assert n_par43 - n_par0 == 2 * w0.numel(), f"V4.3 has {n_par43 - n_par0} extra parameters, expected 2 first-conv columns"
+print(f"parameters: stock {n_par0}, V4.3 {n_par43} (+{n_par43 - n_par0} = two first-conv input columns)")
 assert dmax <= 1e-4 * scale, "with no MRI the V4.3 network does not reproduce the stock network"
 assert abs(l43_same - l0) <= 1e-6 * abs(l0), "the V4.3 loss path differs from the stock loss on identical outputs"
 assert abs(l43 - l0) <= 1e-5 * abs(l0), "the V4.3 loss differs from the stock loss"

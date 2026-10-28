@@ -11,6 +11,7 @@
 #
 #  bash tests/v4_nnunet_smoke43.sh <gpu_id>      # or 'queue': use the CUDA_VISIBLE_DEVICES the queue set
 set -euo pipefail
+# every long step has a 30-min timeout: a hung nnU-Net preprocessing pool (seen 2026-10-28) must not hold a GPU slot
 cd "$(dirname "$0")/.."
 PY=$HOME/miniconda3/envs/topocnv/bin/python
 NNPY=$HOME/cnv/envs/nnunetv2_cnv/bin/python
@@ -46,9 +47,9 @@ assert z in tr or z in v, z
 cases = [c for c in tr if c != z][:2] + [v[0]] + ([z] if z != v[0] else [])
 print(','.join(cases), v[0], z)")
 echo "cases $CASES (V_0 case $VCASE, reg_ok = 0 case $ZCASE)"
-$NNPY tools/v4_nnunet.py prep42 --what binY --cases "$CASES" --np 4 | tail -1
-$NNPY tools/v4_mm43.py prep43 --what mm --cases "$CASES" --np 4 --skip_verify | tail -1
-$NNPY tools/v4_mm43.py prep43 --what shuf --cases "$CASES" --np 4 --skip_verify | tail -1
+timeout 1800 $NNPY tools/v4_nnunet.py prep42 --what binY --cases "$CASES" --np 4 | tail -1
+timeout 1800 $NNPY tools/v4_mm43.py prep43 --what mm --cases "$CASES" --np 4 --skip_verify | tail -1
+timeout 1800 $NNPY tools/v4_mm43.py prep43 --what shuf --cases "$CASES" --np 4 --skip_verify | tail -1
 $NNPY - "$CASES" "$ZCASE" <<'EOF'
 import json
 import sys
@@ -93,7 +94,7 @@ print(f"557/558 channels OK for {cases}")
 EOF
 
 echo "== [smoke43 2/5] train43 (smoke trainer, strong dropout) =="
-$NNPY tools/v4_mm43.py train43 --what mm --fold 0 --variant dev --trainer nnUNetTrainerV43_SMOKE_MMd \
+timeout 1800 $NNPY tools/v4_mm43.py train43 --what mm --fold 0 --variant dev --trainer nnUNetTrainerV43_SMOKE_MMd \
     --name smoke43 --cases "$VCASE" | tail -2
 
 echo "== [smoke43 3/5] dropout branches, both conditions, independent prediction =="
@@ -158,7 +159,7 @@ print(f"max |logit(with MRI) - logit(no MRI)| = {dl:.3e} (case has MRI: {has_mri
 EOF
 
 echo "== [smoke43 4/5] zero-impact test (V4_PLAN §12.8): no MRI + no dropout == stock trainer =="
-$NNPY tests/v4_zero_impact43.py 2>&1 | grep -v -i warn | tail -6
+timeout 1800 $NNPY tests/v4_zero_impact43.py 2>&1 | grep -v -i warn | tail -6
 [ "${PIPESTATUS[0]}" -eq 0 ] || { echo "SMOKE43 FAIL: zero-impact test"; exit 1; }
 
 echo "== [smoke43 5/5] production markers untouched =="
