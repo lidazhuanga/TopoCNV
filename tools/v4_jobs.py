@@ -16,6 +16,9 @@ V4.2 (V4_PLAN §11; full image, harmonised labels; tools/v4_nnunet.py prep42 / t
   python tools/v4_jobs.py smoke42p --after s142_dev_f0_i2   # GPU smoke of the prior path, gates the D2' chain
   python tools/v4_jobs.py d2chain42 --folds 0,1,2,3,4    # Stage 1 holdout prediction -> priors -> Dataset542+k,
                                                          # D4' scores + selection, D2' arms + scores + selection
+V4.3 (V4_PLAN §12; tools/v4_mm43.py):
+  python tools/v4_jobs.py mm43 --folds 0,1,2,3,4 --after smoke42p   # Dataset557, GPU smoke smoke43, MMd-1/MMd-2
+                                                         # dev runs, scores (with / without MRI), selection
 Jobs are inserted next to their fold's existing jobs (priority = list order); jobs.json is replaced atomically.
 """
 import argparse
@@ -109,10 +112,39 @@ def d2chain42(jobs, k):
                "done": f"results/v4_select42/fold{k}/d2.json"}, tail)
 
 
+def mm43(jobs, folds, after):
+    """V4.3 dev phase (V4_PLAN §12.5), inserted after `after` so it runs ahead of the D2' prior arms.
+    Selection also needs the fold's v42_r0u score (sc42_v42_r0u_f{k}, from d2chain42)."""
+    if after is None:
+        raise SystemExit("mm43 needs --after <key> (its place in the priority order)")
+    add(jobs, {"key": "nnprep43_mm", "kind": "cpu", "deps": ["nnprep42_binY"],
+               "cmd": [NNPY, "tools/v4_mm43.py", "prep43", "--what", "mm"],
+               "done": "log/v4/nnprep_557.done"}, after)
+    add(jobs, {"key": "smoke43", "kind": "gpu", "deps": [], "cmd": ["bash", "tests/v4_nnunet_smoke43.sh", "queue"],
+               "done": "log/v4/smoke43.done"}, after)
+    ev = "results/v4_dev_eval_harm_v1/{n}/fold%d.csv"
+    for k in folds:
+        for c in ("1", "2"):
+            n = f"v43_mmd{c}"
+            add(jobs, {"key": f"nn43_{n}_dev_f{k}", "kind": "gpu", "deps": ["nnprep43_mm", "smoke43"],
+                       "cmd": [NNPY, "tools/v4_mm43.py", "train43", "--what", "mm", "--fold", str(k), "--variant", "dev",
+                               "--trainer", f"nnUNetTrainerV43_MMd{c}", "--name", n],
+                       "done": f"log/v4/nn43_{n}_dev_f{k}.done"}, after)
+    for k in folds:
+        names = [f"v43_mmd{c}{s}" for c in ("1", "2") for s in ("", "_nomri")]
+        for n in names:
+            add(jobs, {"key": f"sc43_{n}_f{k}", "kind": "cpu", "deps": [f"nn43_{n.replace('_nomri', '')}_dev_f{k}"],
+                       "cmd": [PY, "tools/v4_dev_summary.py", "score", n, "--gt", "harm_v1", "--folds", str(k)],
+                       "done": ev.format(n=n) % k}, after)
+        add(jobs, {"key": f"sel43_f{k}", "kind": "cpu", "deps": [f"sc43_{n}_f{k}" for n in names] + [f"sc42_v42_r0u_f{k}"],
+                   "cmd": [PY, "tools/v4_select43.py", "select", "--fold", str(k)],
+                   "done": f"results/v4_select43/fold{k}.json"}, after)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("what", choices=["stage1", "priors", "r0dev", "stage2", "nnprep", "nntrain", "list",
-                                     "nnprep42", "nntrain42", "s1train42", "d2chain42", "smoke42p"])
+                                     "nnprep42", "nntrain42", "s1train42", "d2chain42", "smoke42p", "mm43"])
     # stage2 = legacy DynUNet appendix path only (V4_PLAN §5); mainline arms are nnprep/nntrain
     ap.add_argument("--folds", default="0,1")
     ap.add_argument("--tier", choices=["report", "dev"], default="report",
@@ -124,7 +156,7 @@ def main():
     ap.add_argument("--shuffle", action="store_true")
     ap.add_argument("--trainer")
     ap.add_argument("--name")
-    ap.add_argument("--after", default=None, help="smoke42p: insert after this job key")
+    ap.add_argument("--after", default=None, help="smoke42p / mm43: insert after this job key")
     ap.add_argument("--what42", dest="what42", choices=["binY", "s1"], default="binY",
                     help="nnprep42: which V4.2 dataset (540 binY, 541 s1)")
     args = ap.parse_args()
@@ -144,6 +176,9 @@ def main():
     if args.what == "smoke42p":     # GPU smoke of the prior path; gates the whole D2' chain
         add(jobs, {"key": "smoke42p", "kind": "gpu", "cmd": ["bash", "tests/v4_nnunet_smoke42p.sh", "queue"],
                    "done": "log/v4/smoke42p.done"}, args.after)
+        folds = []
+    if args.what == "mm43":
+        mm43(jobs, folds, args.after)
         folds = []
     for k in folds:
         if args.what == "stage1":
