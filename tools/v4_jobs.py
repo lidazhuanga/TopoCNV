@@ -17,7 +17,7 @@ V4.2 (V4_PLAN §11; full image, harmonised labels; tools/v4_nnunet.py prep42 / t
   python tools/v4_jobs.py d2chain42 --folds 0,1,2,3,4    # Stage 1 holdout prediction -> priors -> Dataset542+k,
                                                          # D4' scores + selection, D2' arms + scores + selection
 V4.3 (V4_PLAN §12; tools/v4_mm43.py):
-  python tools/v4_jobs.py mm43 --folds 0,1,2,3,4 --after smoke42p   # Dataset557, GPU smoke smoke43, MMd-1/MMd-2
+  python tools/v4_jobs.py mm43 --folds 0,1,2,3,4 --after smoke43    # Dataset557, GPU smoke smoke43, MMd-1/MMd-2
                                                          # dev runs, scores (with / without MRI), selection
 Jobs are inserted next to their fold's existing jobs (priority = list order); jobs.json is replaced atomically.
 """

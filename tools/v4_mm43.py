@@ -88,6 +88,10 @@ def verify_mri_cache(np_=8):
     return sums_sha, sums
 
 
+from functools import lru_cache  # noqa: E402
+
+
+@lru_cache(maxsize=1)
 def reg_ok():
     """{case: 0/1} from qa_summary.csv (cnv-mri-prep's automatic registration rule; coverage never sets 0)."""
     import csv
@@ -180,6 +184,7 @@ def _write43(a):
     shift = None
     if donor is None:
         mri, valid = load_mri(case)
+        assert reg_ok()[case] == 1 or (not mri.any() and not valid.any()), f"{case}: reg_ok = 0 but MRI/mask not zero"
     else:
         mri, valid, shift = shuffled_mri(case, donor)
     for ch, arr, dt in ((1, mri, np.float32), (2, valid, np.uint8)):
@@ -332,8 +337,10 @@ def train43(args):
     cmd = [N.bin_cmd("nnUNetv2_train"), str(did), N.CONFIG, str(split), "-tr", trainer, "-p", N.PLANS]
     with_mri, no_mri = results_dirs(fd)
     if (fd / "checkpoint_final.pth").exists():
-        done = (with_mri / "DONE").exists() and (no_mri / "DONE").exists()
-        cmd = None if done else cmd + ["--val"]
+        ck = N._file_sha(fd / "checkpoint_final.pth")
+        done = all((d / "DONE").exists() and (d / "CHECKPOINT").exists() and (d / "CHECKPOINT").read_text().strip() == ck
+                   for d in (with_mri, no_mri))
+        cmd = None if done else cmd + ["--val"]          # missing, or validated from other weights: validate again
     elif (fd / "checkpoint_latest.pth").exists():
         cmd.append("--c")
     if cmd:
@@ -360,6 +367,8 @@ def export43(args, fd, trainer, meta):
     for sub, name in zip(results_dirs(fd), (args.name, f"{args.name}_nomri")):
         if not (sub / "DONE").exists():
             raise SystemExit(f"{sub}/DONE missing: validation did not finish")
+        if not (sub / "CHECKPOINT").exists() or (sub / "CHECKPOINT").read_text().strip() != ckpt:
+            raise SystemExit(f"{sub}: validated from other weights than the current checkpoint_final.pth")
         out = (RESULTS / "v4_dev_preds" / name / f"fold{k}" if args.variant == "dev"
                else RESULTS / f"v4_{name}_label_predictions")
         out.mkdir(parents=True, exist_ok=True)
@@ -391,9 +400,12 @@ def install43(_):
     if not (dst / "nnUNetTrainerV4.py").exists():
         raise SystemExit(f"{dst}/nnUNetTrainerV4.py missing: run tools/v4_nnunet.py install first")
     link = dst / "nnUNetTrainerV43.py"
-    if link.is_symlink() or link.exists():
+    target = ROOT / "trainer" / "v4" / "nnunet" / "nnUNetTrainerV43.py"
+    if link.exists() and not link.is_symlink():
+        raise SystemExit(f"{link} is a regular file, not our symlink: refusing to delete it")
+    if link.is_symlink():
         link.unlink()
-    link.symlink_to(ROOT / "trainer" / "v4" / "nnunet" / "nnUNetTrainerV43.py")
+    link.symlink_to(target)
     print(f"installed {link} -> {link.resolve()}")
 
 

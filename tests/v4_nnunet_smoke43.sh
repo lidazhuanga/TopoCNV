@@ -6,6 +6,7 @@
 #   2. train43 -> every dropout branch fired; 3-input network; validation_v4 and validation_v4_nomri
 #   3. an independent sliding-window prediction from checkpoint_final reproduces both conditions, and the MRI
 #      channels change the network output
+#   4. zero-impact test (tests/v4_zero_impact43.py): no MRI, no dropout -> same outputs and loss as the stock trainer
 # No production dataset or marker is touched; on success writes log/v4/smoke43.done, the gate of the mm43 runs.
 #
 #  bash tests/v4_nnunet_smoke43.sh <gpu_id>      # or 'queue': use the CUDA_VISIBLE_DEVICES the queue set
@@ -35,7 +36,7 @@ MARKS_BEFORE=$(marks)
 $NNPY -c "import nnunetv2.training.nnUNetTrainer.variants.zz_cnv_v4.nnUNetTrainerV43" \
   || { echo "V4.3 trainer not installed: run tools/v4_mm43.py install43"; exit 1; }
 
-echo "== [smoke43 1/4] cases, Dataset540 / 557 / 558 subsets =="
+echo "== [smoke43 1/5] cases, Dataset540 / 557 / 558 subsets =="
 read -r CASES VCASE ZCASE < <($PY -c "
 import sys; sys.path.insert(0, '.')
 from trainer.v4.splits import internal_split
@@ -91,11 +92,11 @@ for c in cases:
 print(f"557/558 channels OK for {cases}")
 EOF
 
-echo "== [smoke43 2/4] train43 (smoke trainer, strong dropout) =="
+echo "== [smoke43 2/5] train43 (smoke trainer, strong dropout) =="
 $NNPY tools/v4_mm43.py train43 --what mm --fold 0 --variant dev --trainer nnUNetTrainerV43_SMOKE_MMd \
     --name smoke43 --cases "$VCASE" | tail -2
 
-echo "== [smoke43 3/4] dropout branches, both conditions, independent prediction =="
+echo "== [smoke43 3/5] dropout branches, both conditions, independent prediction =="
 $NNPY - "$VCASE" <<'EOF'
 import re
 import sys
@@ -156,8 +157,12 @@ assert dl > 0 or not has_mri, "zeroing the MRI channels does not change the outp
 print(f"max |logit(with MRI) - logit(no MRI)| = {dl:.3e} (case has MRI: {has_mri})")
 EOF
 
-echo "== [smoke43 4/4] production markers untouched =="
+echo "== [smoke43 4/5] zero-impact test (V4_PLAN §12.8): no MRI + no dropout == stock trainer =="
+$NNPY tests/v4_zero_impact43.py 2>&1 | grep -v -i warn | tail -6
+[ "${PIPESTATUS[0]}" -eq 0 ] || { echo "SMOKE43 FAIL: zero-impact test"; exit 1; }
+
+echo "== [smoke43 5/5] production markers untouched =="
 [ -e log/v4/nn43_smoke43_dev_f0.done ] && { echo "SMOKE43 FAIL: a smoke run wrote a queue marker"; exit 1; }
 if [ "$(marks)" != "$MARKS_BEFORE" ]; then echo "SMOKE43 FAIL: a production marker changed"; exit 1; fi
-echo "$(date -Iseconds) smoke43 OK on GPU $GPU, HEAD $(git rev-parse --short HEAD)" > log/v4/smoke43.done
+echo "$(date -Iseconds) smoke43 OK on GPU $GPU, HEAD $(git rev-parse --short HEAD), script $(sha256sum tests/v4_nnunet_smoke43.sh | cut -c1-12), trainer $(sha256sum trainer/v4/nnunet/nnUNetTrainerV43.py | cut -c1-12), tool $(sha256sum tools/v4_mm43.py | cut -c1-12)" > log/v4/smoke43.done
 echo "SMOKE43_OK (values meaningless; plumbing validated)"

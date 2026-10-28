@@ -4,7 +4,9 @@ Installed next to nnUNetTrainerV4.py in nnunetv2/training/nnUNetTrainer/variants
 (tools/v4_mm43.py install43). Top-level imports are nnunetv2/torch/numpy and the V4 module only.
 
 Input (Dataset557/558): channel 0 CT, 1 MRI ([0, 1], 0 outside the field of view), 2 MRI valid mask (0/1).
-Everything else is nnUNetTrainerV4 with no priors, no visibility head and no Skeleton Recall (binary Y,
+Dropout draws come from one np.random stream per (fold, epoch); validation also writes the sha256 of
+checkpoint_final.pth to validation_v4*/CHECKPOINT. The trainer asserts it wrapped exactly N_INTENSITY_WRAPPED
+intensity transforms. Everything else is nnUNetTrainerV4 with no priors, no visibility head and no Skeleton Recall (binary Y,
 DC_and_CE with deep supervision, Y foreground oversampling, 300 epochs), so on a CT-only input it equals R0u.
   * Intensity DA acts on CT and MRI, never on the mask; spatial DA is shared by all three channels.
   * Every batch, after DA and before the network (train, validation, inference): mask <- mask > 0.5,
@@ -16,6 +18,7 @@ DC_and_CE with deep supervision, Y foreground oversampling, 300 epochs), so on a
   * perform_actual_validation writes validation_v4/ (each case's own MRI) and validation_v4_nomri/
     (channels 1-2 zeroed for every case), both from the same network state.
 """
+import hashlib
 import os
 import shutil
 
@@ -30,6 +33,9 @@ TILT_MAX_DEG = 20.0
 SLAB_SLICES = (4, 10)
 DROP_SEED = 20261028
 CANDIDATES = {"MMd1": (0.2, 0.3, 0.2), "MMd2": (0.4, 0.5, 0.3)}   # (p_case, p_trunc, p_slab), V4_PLAN §12.4
+# stock intensity RandomTransforms instantiated by nnUNetTrainer.get_training_transforms (nnunetv2 2.5.2,
+# batchgeneratorsv2 0.3.6; qoder review 9): a different count means the class-name match may miss one
+N_INTENSITY_WRAPPED = 7
 
 
 class FirstChannels:
@@ -104,14 +110,17 @@ class nnUNetTrainerV43(nnUNetTrainerV4):
     def wrap_intensity_ct_only(tr_t):
         """V4.3: intensity DA sees CT and MRI (channels 0-1); the valid mask keeps its 0/1 values.
         (The name is the hook nnUNetTrainerV4.get_dataloaders calls.)"""
-        out = []
+        out, n = [], 0
         for t in tr_t.transforms:
             name = type(t).__name__
             if name == "RandomTransform" and type(getattr(t, "transform", None)).__name__ in INTENSITY_DA:
                 t.transform = FirstChannels(t.transform, 2)
+                n += 1
             elif name in INTENSITY_DA:
                 t = FirstChannels(t, 2)
+                n += 1
             out.append(t)
+        assert n == N_INTENSITY_WRAPPED, f"wrapped {n} intensity transforms, expected {N_INTENSITY_WRAPPED}: "                                          "the installed DA pipeline changed, the mask could be augmented"
         tr_t.transforms = out
         return tr_t
 
@@ -122,7 +131,8 @@ class nnUNetTrainerV43(nnUNetTrainerV4):
         tf = list(self.plans_manager.transpose_forward)
         assert tf == [0, 1, 2], f"V4.3 dropout assumes patch axis 0 = cache axis 0 (cranial +), plans {tf}"
         self.drop_spacing = [float(s) for s in self.configuration_manager.spacing]
-        self.drop_rng = np.random.default_rng(DROP_SEED + 1000 * int(fold) if str(fold).isdigit() else DROP_SEED)
+        self.drop_fold = int(fold) if str(fold).isdigit() else -1
+        self.drop_rng = np.random.default_rng([DROP_SEED, self.drop_fold + 1, 0])
         self._dropping = False
         self._no_mri = False
         self.drop_counts = {"samples": 0, "case": 0, "trunc": 0, "slab": 0}
@@ -154,6 +164,11 @@ class nnUNetTrainerV43(nnUNetTrainerV4):
         finally:
             self._dropping = False
 
+    def on_epoch_start(self):
+        # one stream per (fold, epoch): a resumed run (--c) continues the sequence instead of replaying epoch 0's
+        self.drop_rng = np.random.default_rng([DROP_SEED, self.drop_fold + 1, int(self.current_epoch) + 1])
+        super().on_epoch_start()
+
     def on_epoch_end(self):
         super().on_epoch_end()
         if self.P_CASE or self.P_TRUNC or self.P_SLAB:
@@ -171,6 +186,15 @@ class nnUNetTrainerV43(nnUNetTrainerV4):
             shutil.rmtree(nomri)
         os.replace(out, nomri)
         super().perform_actual_validation(save_probabilities)
+        ck = os.path.join(self.output_folder, "checkpoint_final.pth")
+        if os.path.exists(ck):    # which weights both conditions came from (train43 / export43 compare it)
+            h = hashlib.sha256()
+            with open(ck, "rb") as f:
+                for b in iter(lambda: f.read(1 << 24), b""):
+                    h.update(b)
+            for d in (nomri, out):
+                with open(os.path.join(d, "CHECKPOINT"), "w") as f:
+                    f.write(h.hexdigest() + "\n")
 
 
 def _arm43(name, p_case=0.0, p_trunc=0.0, p_slab=0.0, smoke=False):
