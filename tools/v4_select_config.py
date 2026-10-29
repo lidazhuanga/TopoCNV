@@ -40,7 +40,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from trainer.v4.splits import internal_split  # noqa: E402
+from topocnv.data.v4_splits import internal_split  # noqa: E402
 
 
 def read_dice_csv(path):

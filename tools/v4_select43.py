@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import v4_mm43 as M  # noqa: E402
 import v4_nnunet as N  # noqa: E402
 import v4_select42 as S42  # noqa: E402
-from trainer.v4.splits import internal_split  # noqa: E402
+from topocnv.data.v4_splits import internal_split  # noqa: E402
 
 PROTOCOL = M.PROTOCOL
 TOL = 0.003

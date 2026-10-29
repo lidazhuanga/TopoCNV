@@ -1,0 +1,49 @@
+{
+ "tol": 0.003,
+ "candidates": [
+  {
+   "name": "r1",
+   "simple": 1,
+   "csv": "results/v4_dev_preds/r1/fold3/eval.csv",
+   "config": {
+    "trainer": "nnUNetTrainerV4_R1"
+   }
+  },
+  {
+   "name": "r1p_abc",
+   "simple": 3,
+   "csv": "results/v4_dev_preds/r1p_abc/fold3/eval.csv",
+   "config": {
+    "trainer": "nnUNetTrainerV4_Pabc",
+    "margin": 15
+   }
+  },
+  {
+   "name": "r1p_bc",
+   "simple": 2,
+   "csv": "results/v4_dev_preds/r1p_bc/fold3/eval.csv",
+   "config": {
+    "trainer": "nnUNetTrainerV4_Pbc",
+    "margin": 15
+   }
+  },
+  {
+   "name": "r1p_ac",
+   "simple": 2,
+   "csv": "results/v4_dev_preds/r1p_ac/fold3/eval.csv",
+   "config": {
+    "trainer": "nnUNetTrainerV4_Pac",
+    "margin": 15
+   }
+  },
+  {
+   "name": "r1p_ab",
+   "simple": 2,
+   "csv": "results/v4_dev_preds/r1p_ab/fold3/eval.csv",
+   "config": {
+    "trainer": "nnUNetTrainerV4_Pab",
+    "margin": 15
+   }
+  }
+ ]
+}

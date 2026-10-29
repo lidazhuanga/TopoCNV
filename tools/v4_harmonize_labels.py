@@ -25,10 +25,11 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
-from trainer.v4.common import CACHE_DIR, RESULTS, load_image, load_label, mask_Y  # noqa: E402
-from trainer.v4.harmonize import (PLANE4, SIGMA, THIN_THR, T_GRID, harmonise, run_length,  # noqa: E402
+from topocnv.data.utils import CACHE_DIR, RESULTS, load_image, load_label  # noqa: E402
+from topocnv.utils.box_ops import mask_Y  # noqa: E402
+from topocnv.data.harmonize import (PLANE4, SIGMA, THIN_THR, T_GRID, harmonise, run_length,  # noqa: E402
                                   skeleton, thickness)
-from trainer.v4.splits import all_cases, internal_split  # noqa: E402
+from topocnv.data.v4_splits import all_cases, internal_split  # noqa: E402
 
 VERSION = "harm_v1"
 AMENDMENT = "V4-AM-20261027-02"
@@ -103,7 +104,7 @@ def calibrate(args):
            "n_cases": len(cases), "n_thin": len(thin), "thin_cases": thin,
            "per_case_thickness": {c: round(th[c], 4) for c in cases},
            "date_window": window, "source_cache": str(CACHE_DIR),
-           "code_sha256": {"trainer/v4/harmonize.py": sha(REPO / "trainer" / "v4" / "harmonize.py"),
+           "code_sha256": {"topocnv/data/harmonize.py": sha(REPO / "topocnv" / "data" / "harmonize.py"),
                            "tools/v4_harmonize_labels.py": sha(Path(__file__).resolve())}}
     CFG.parent.mkdir(parents=True, exist_ok=True)
     CFG.write_text(json.dumps(cfg, indent=1))

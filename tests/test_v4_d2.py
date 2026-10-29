@@ -13,7 +13,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
-from trainer.v4.splits import N_INNER, internal_split  # noqa: E402
+from topocnv.data.v4_splits import N_INNER, internal_split  # noqa: E402
 
 
 def _load(name):

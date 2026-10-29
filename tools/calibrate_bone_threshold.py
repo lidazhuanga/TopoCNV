@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from npc_data import DATA_ROOT_DEFAULT, _get_all_cases  # noqa: E402
+from topocnv.data.dataset import DATA_ROOT_DEFAULT, _get_all_cases  # noqa: E402
 
 
 def normalized_value(image: np.ndarray, hu: float) -> float:

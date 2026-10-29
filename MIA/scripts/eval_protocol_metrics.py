@@ -46,7 +46,7 @@ REPO = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO))
 
-from metrics_protocol import (  # noqa: E402
+from topocnv.metrics.protocol import (  # noqa: E402
     DEFAULT_DATA_ROOT,
     DEFAULT_SPACING_ZYX,
     V04_KEYS,

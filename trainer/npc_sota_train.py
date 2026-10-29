@@ -46,24 +46,25 @@ for _p in (PROJECT_ROOT, PROJECT_ROOT / "MIA" / "scripts"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from metrics_protocol import DEFAULT_SPACING_ZYX, _dice, _hd95, mask_Y
-from npc_data import DATA_ROOT_DEFAULT, get_train_val_datasets, _get_all_cases, _create_folds
-from npc_losses import WeightedBCEDiceLoss, multiclass_dice_score
-import npc_preprocess as pp
+from topocnv.metrics.protocol import DEFAULT_SPACING_ZYX, _dice, _hd95, mask_Y
+from topocnv.config import defaults as _defaults
+from topocnv.config.loader import load_json
+from topocnv.data.dataset import DATA_ROOT_DEFAULT, get_train_val_datasets, _get_all_cases, _create_folds
+from topocnv.losses import WeightedBCEDiceLoss, multiclass_dice_score
+from topocnv.data import preprocess as pp
+from topocnv.models.sota import (
+    NNFormer3D, _ConvTransformerBlock, _nnFormerEncoderBlock, _nnFormerDecoderBlock,
+    build_sota_model,
+)
 
 # Reuse training loop and sliding-window validation from npc_baseline
-from npc_baseline import (
-    train_one_epoch,
-    evaluate,
-    validate_with_sliding_window,
-    compute_dice_per_class,
-    AMP_DTYPE,
-    USE_GRAD_SCALER,
-)
+from topocnv.engine.segmentation import train_supervised_epoch as train_one_epoch, evaluate_supervised_epoch as evaluate, validate_with_sliding_window, compute_dice_per_class, AMP_DTYPE, USE_GRAD_SCALER
+from topocnv.data.labels import convert_label_to_binary_Y as _convert_label_to_binary_Y, BinaryYDataset, load_label_volume
 
 # Fast cached dataset (reuses preprocessed 31GB cache)
 try:
-    from npc_data_cached import CachedSOTADataset, DEFAULT_CACHE_DIR
+    from topocnv.data.dataset import CachedSOTADataset
+    from topocnv.data.utils import DEFAULT_CACHE_DIR
     HAS_CACHED_DATASET = True
 except ImportError:
     HAS_CACHED_DATASET = False
@@ -76,8 +77,8 @@ from monai.networks.nets import DynUNet, SegResNet, AttentionUnet, UNETR, SwinUN
 # ==================== Config ====================
 RESULTS_ROOT = os.environ.get("CNV_RESULTS_ROOT", str(PROJECT_ROOT / "results"))
 EXPERIMENT_PREFIX = "sota_binary_y"  # legacy 6-class runs: npc_sota_<model>
-PATCH_SIZE: Tuple[int, int, int] = (128, 128, 128)
-BATCH_SIZE = 2
+PATCH_SIZE: Tuple[int, int, int] = _defaults.SOTA_PATCH_SIZE
+BATCH_SIZE = _defaults.SOTA_BATCH_SIZE
 NUM_CLASSES = 2  # BINARY_Y_ENDPOINT: bg + Y(1∪2∪3∪4); class5_bypass→bg
 BINARY_Y_ENDPOINT = True  # protocol §14 / = B0
 NUM_FOLDS = 5
@@ -101,178 +102,17 @@ SUPPORTED_MODELS = [
 
 
 # ==================== nnFormer Implementation ====================
-class _ConvTransformerBlock(nn.Module):
-    """Interleaved convolution + transformer block (nnFormer style)."""
-
-    def __init__(self, in_ch: int, num_heads: int = 4, mlp_ratio: float = 2.0,
-                 window_size: Tuple[int, int, int] = (4, 4, 4)):
-        super().__init__()
-        self.window_size = window_size
-
-        # Convolution branch
-        self.conv = nn.Sequential(
-            nn.Conv3d(in_ch, in_ch, kernel_size=3, padding=1, bias=False),
-            nn.InstanceNorm3d(in_ch, affine=True),
-            nn.GELU(),
-        )
-
-        # Local-window self-attention
-        self.norm1 = nn.LayerNorm(in_ch)
-        self.attn = nn.MultiheadAttention(
-            embed_dim=in_ch, num_heads=num_heads, batch_first=True,
-        )
-        self.norm2 = nn.LayerNorm(in_ch)
-        hidden = int(in_ch * mlp_ratio)
-        self.mlp = nn.Sequential(
-            nn.Linear(in_ch, hidden),
-            nn.GELU(),
-            nn.Linear(hidden, in_ch),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, C, D, H, W)
-        B, C, D, H, W = x.shape
-
-        # Conv branch
-        x = x + self.conv(x)
-
-        # Pad to window boundaries
-        wd, wh, ww = self.window_size
-        pad_d = (wd - D % wd) % wd
-        pad_h = (wh - H % wh) % wh
-        pad_w = (ww - W % ww) % ww
-        if pad_d or pad_h or pad_w:
-            x = F.pad(x, (0, pad_w, 0, pad_h, 0, pad_d))
-        Dp, Hp, Wp = x.shape[2], x.shape[3], x.shape[4]
-
-        # Window partition
-        nD, nH, nW = Dp // wd, Hp // wh, Wp // ww
-        # (B, C, nD*wd, nH*wh, nW*ww) -> (B*nD*nH*nW, C, wd, wh, ww)
-        x = x.view(B, C, nD, wd, nH, wh, nW, ww)
-        x = x.permute(0, 2, 4, 6, 1, 3, 5, 7).contiguous()
-        x = x.view(-1, C, wd * wh * ww)  # (num_windows*B, C, window_tokens)
-        x = x.transpose(1, 2)  # (num_windows*B, window_tokens, C)
-
-        # Self-attention
-        residual = x
-        x = self.norm1(x)
-        x, _ = self.attn(x, x, x)
-        x = x + residual
-
-        # MLP
-        x = x + self.mlp(self.norm2(x))
-
-        # Reverse window partition
-        x = x.transpose(1, 2)  # (num_windows*B, C, window_tokens)
-        x = x.view(B, nD, nH, nW, C, wd, wh, ww)
-        x = x.permute(0, 4, 1, 5, 2, 6, 3, 7).contiguous()
-        x = x.view(B, C, Dp, Hp, Wp)
-
-        # Remove padding
-        if pad_d or pad_h or pad_w:
-            x = x[:, :, :D, :H, :W]
-
-        return x
-
-
-class _nnFormerEncoderBlock(nn.Module):
-    def __init__(self, in_ch: int, out_ch: int, num_heads: int = 4):
-        super().__init__()
-        self.conv_trans = _ConvTransformerBlock(out_ch, num_heads=num_heads)
-        self.down = nn.Conv3d(in_ch, out_ch, kernel_size=3, stride=2, padding=1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.down(x)
-        x = self.conv_trans(x)
-        return x
-
-
-class _nnFormerDecoderBlock(nn.Module):
-    def __init__(self, in_ch: int, skip_ch: int, out_ch: int, num_heads: int = 4):
-        super().__init__()
-        self.up = nn.ConvTranspose3d(in_ch, out_ch, kernel_size=2, stride=2)
-        self.conv = nn.Sequential(
-            nn.Conv3d(out_ch + skip_ch, out_ch, kernel_size=3, padding=1, bias=False),
-            nn.InstanceNorm3d(out_ch, affine=True),
-            nn.GELU(),
-            nn.Conv3d(out_ch, out_ch, kernel_size=3, padding=1, bias=False),
-            nn.InstanceNorm3d(out_ch, affine=True),
-            nn.GELU(),
-        )
-
-    def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
-        x = self.up(x)
-        # Pad if shapes don't match exactly
-        if x.shape[2:] != skip.shape[2:]:
-            diff = [s2 - s1 for s1, s2 in zip(x.shape[2:], skip.shape[2:])]
-            x = F.pad(x, [diff[2] // 2, diff[2] - diff[2] // 2,
-                          diff[1] // 2, diff[1] - diff[1] // 2,
-                          diff[0] // 2, diff[0] - diff[0] // 2])
-        x = torch.cat([skip, x], dim=1)
-        return self.conv(x)
-
-
-class NNFormer3D(nn.Module):
-    """Simplified nnFormer: interleaved Conv+Transformer encoder, U-Net decoder.
-
-    Reference: Zhou et al., "nnFormer: Volumetric Medical Image Segmentation via
-    a 3D Transformer", IEEE TIP 2023.
-    """
-
-    def __init__(self, in_channels: int = 1, num_classes: int = 6,
-                 base_channels: int = 32):
-        super().__init__()
-        c = base_channels
-        # Stem
-        self.stem = nn.Sequential(
-            nn.Conv3d(in_channels, c, kernel_size=3, padding=1, bias=False),
-            nn.InstanceNorm3d(c, affine=True),
-            nn.GELU(),
-        )
-        # Encoder
-        self.enc1 = _nnFormerEncoderBlock(c, c * 2, num_heads=2)
-        self.enc2 = _nnFormerEncoderBlock(c * 2, c * 4, num_heads=4)
-        self.enc3 = _nnFormerEncoderBlock(c * 4, c * 8, num_heads=4)
-        # Bottleneck
-        self.bottleneck = _ConvTransformerBlock(c * 8, num_heads=4)
-        # Decoder (skip from encoder at matching resolution)
-        self.dec3 = _nnFormerDecoderBlock(c * 8, c * 4, c * 4, num_heads=4)
-        self.dec2 = _nnFormerDecoderBlock(c * 4, c * 2, c * 2, num_heads=4)
-        self.dec1 = _nnFormerDecoderBlock(c * 2, c, c, num_heads=2)
-        # Output
-        self.out_conv = nn.Conv3d(c, num_classes, kernel_size=1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x0 = self.stem(x)       # full res, c channels
-        x1 = self.enc1(x0)      # 1/2 res, c*2 channels
-        x2 = self.enc2(x1)      # 1/4 res, c*4 channels
-        x3 = self.enc3(x2)      # 1/8 res, c*8 channels
-        b = self.bottleneck(x3)  # 1/8 res, c*8 channels
-        d3 = self.dec3(b, x2)   # up: 1/8->1/4, skip: x2 at 1/4
-        d2 = self.dec2(d3, x1)  # up: 1/4->1/2, skip: x1 at 1/2
-        d1 = self.dec1(d2, x0)  # up: 1/2->1/1, skip: x0 at 1/1
-        return self.out_conv(d1)
+# 模型类由 topocnv.models.sota 重导出，保留旧模块的公开及私有导入名称。
 
 
 # ==================== Model Factory ====================
 
 def convert_label_to_binary_Y(label):
-    """Map original labels {0..5} → {0,1}; Y=1∪2∪3∪4; class5_bypass→0."""
-    lab = np.asarray(label)
-    return ((lab >= 1) & (lab <= 4)).astype(np.int64)
+    return _convert_label_to_binary_Y(label)
 
 
 def _load_label_volume(label_path):
-    """GT label in NIfTI (x, y, z) order; supports NIfTI and NRRD (4D one-hot -> ids)."""
-    if str(label_path).endswith('.nrrd') and _nrrd is not None:
-        data, _ = _nrrd.read(str(label_path))
-        if data.ndim == 4:
-            label = np.zeros(data.shape[1:], dtype=np.int16)
-            for ci in range(data.shape[0]):
-                label[data[ci] > 0] = ci + 1
-            return np.clip(label, 0, 5)
-        return data.astype(np.int16)
-    return nib.load(str(label_path)).get_fdata().astype(np.int16)
+    return load_label_volume(label_path, nrrd_module=_nrrd)
 
 
 def _save_label_nrrd(label: np.ndarray, save_path: str):
@@ -353,72 +193,8 @@ def protocol_primary_dice(pred, gt):
 
 def build_model(model_name: str, in_channels: int = 1,
                 num_classes: int = NUM_CLASSES) -> nn.Module:
-    """Create a model instance by name."""
-    if model_name == "nnunet":
-        # DynUNet configured like nnU-Net's 3D full-resolution
-        return DynUNet(
-            spatial_dims=3,
-            in_channels=in_channels,
-            out_channels=num_classes,
-            kernel_size=[[3, 3, 3]] * 6,
-            strides=[[1, 1, 1], [2, 2, 2], [2, 2, 2], [2, 2, 2], [2, 2, 2], [2, 2, 2]],
-            upsample_kernel_size=[[2, 2, 2]] * 5,
-            filters=[32, 64, 128, 256, 320, 320],
-            res_block=True,
-        )
-    elif model_name == "segresnet":
-        return SegResNet(
-            spatial_dims=3,
-            in_channels=in_channels,
-            out_channels=num_classes,
-            init_filters=16,
-            blocks_down=(1, 2, 2, 4),
-            blocks_up=(1, 1, 1),
-            dropout_prob=0.0,
-        )
-    elif model_name == "attention_unet":
-        return AttentionUnet(
-            spatial_dims=3,
-            in_channels=in_channels,
-            out_channels=num_classes,
-            channels=(16, 32, 64, 128, 256),
-            strides=(2, 2, 2, 2),
-            kernel_size=3,
-            up_kernel_size=3,
-        )
-    elif model_name == "unetr":
-        return UNETR(
-            in_channels=in_channels,
-            out_channels=num_classes,
-            img_size=(128, 128, 128),
-            feature_size=16,
-            hidden_size=768,
-            mlp_dim=3072,
-            num_heads=12,
-            proj_type="conv",
-            norm_name="instance",
-            res_block=True,
-            dropout_rate=0.1,
-            spatial_dims=3,
-        )
-    elif model_name == "swin_unetr":
-        return SwinUNETR(
-            in_channels=in_channels,
-            out_channels=num_classes,
-            feature_size=48,
-            use_checkpoint=False,
-            spatial_dims=3,
-        )
-    elif model_name == "nnformer":
-        return NNFormer3D(
-            in_channels=in_channels,
-            num_classes=num_classes,
-            base_channels=32,
-        )
-    else:
-        raise ValueError(
-            f"Unknown model '{model_name}'. Supported: {SUPPORTED_MODELS}"
-        )
+    """保留旧工厂签名及二值默认，委托包内同源架构实现。"""
+    return build_sota_model(model_name, in_channels, num_classes)
 
 
 def get_experiment_name(model_name: str) -> str:
@@ -503,8 +279,7 @@ def main() -> None:
     clip_lower = -200.0
     clip_upper = 300.0
     if args.spacing_params and Path(args.spacing_params).exists():
-        with open(args.spacing_params) as f:
-            params = json.load(f)
+        params = load_json(args.spacing_params)
         target_spacing = tuple(params["target_spacing"])
         clip_lower = params.get("clip_lower", clip_lower)
         clip_upper = params.get("clip_upper", clip_upper)
@@ -519,29 +294,6 @@ def main() -> None:
     print(f"{'='*70}")
 
 
-    class _BinaryYWrap(torch.utils.data.Dataset):
-        """Remap multiclass labels → binary Y for protocol Primary."""
-        def __init__(self, base):
-            self.base = base
-        def __len__(self):
-            return len(self.base)
-        def __getitem__(self, i):
-            item = self.base[i]
-            if isinstance(item, dict):
-                item = dict(item)
-                for key in ("label", "label_meta"):
-                    if key in item and item[key] is not None:
-                        lab = item[key]
-                        lab_np = lab.numpy() if torch.is_tensor(lab) else np.asarray(lab)
-                        item[key] = torch.as_tensor(convert_label_to_binary_Y(lab_np))
-                return item
-            if isinstance(item, (tuple, list)) and len(item) >= 2:
-                img, lab = item[0], item[1]
-                lab_np = lab.numpy() if torch.is_tensor(lab) else np.asarray(lab)
-                lab_t = torch.as_tensor(convert_label_to_binary_Y(lab_np),
-                                        dtype=lab.dtype if torch.is_tensor(lab) else torch.long)
-                return (img, lab_t) + tuple(item[2:])
-            return item
 
     model = build_model(args.model, in_channels=1, num_classes=NUM_CLASSES).to(device)
     total_params = sum(p.numel() for p in model.parameters())
@@ -559,7 +311,7 @@ def main() -> None:
     folds = _create_folds([c[0] for c in cases], num_folds=NUM_FOLDS, seed=42)
     val_ids = set(folds[args.fold])
     if use_cache:
-        from npc_data_cached import CachedSOTADataset
+        from topocnv.data.dataset import CachedSOTADataset
         train_cases = [(p, i, l) for p, i, l in cases if p not in val_ids]
         val_cases = [(p, i, l) for p, i, l in cases if p in val_ids]
         train_dataset = CachedSOTADataset(train_cases, patch_size=PATCH_SIZE,
@@ -583,8 +335,8 @@ def main() -> None:
         print(f"Using NPCDataset (on-the-fly): train={len(train_dataset)}, val={len(val_dataset)}")
     if BINARY_Y_ENDPOINT:
         # Must wrap before building the DataLoaders: DataLoader.dataset is read-only afterwards.
-        train_dataset = _BinaryYWrap(train_dataset)
-        val_dataset = _BinaryYWrap(val_dataset)
+        train_dataset = BinaryYDataset(train_dataset, convert_label=convert_label_to_binary_Y)
+        val_dataset = BinaryYDataset(val_dataset, convert_label=convert_label_to_binary_Y)
         print('[SOTA] wrapped train/val datasets → binary Y')
     train_loader = DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True,

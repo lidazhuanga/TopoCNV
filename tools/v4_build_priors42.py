@@ -39,12 +39,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
 import v4_nnunet as N  # noqa: E402
-from trainer.v4.common import (MARGINS_MM, SPACING, box_slices, boxes_mask, expand_box, mask_Y,  # noqa: E402
-                               union_box)
-from trainer.v4.priors import (DIST_TRUNC_MM, Atlas, atlas_roi_record, bilateral_c4_distance_mm,  # noqa: E402
+from topocnv.data.utils import MARGINS_MM, SPACING  # noqa: E402
+from topocnv.utils.box_ops import (box_slices, boxes_mask, expand_box, mask_Y,  # noqa: E402
+                                   union_box)
+from topocnv.priors import (DIST_TRUNC_MM, Atlas, atlas_roi_record, bilateral_c4_distance_mm,  # noqa: E402
                                choose_template, dist_prior, side_c4_centroids, to_uint8)
-from trainer.v4.roi import compute_case_roi, coverage, head_midline, margin_vox  # noqa: E402
-from trainer.v4.splits import N_INNER, inner_folds, internal_split  # noqa: E402
+from topocnv.priors.roi import compute_case_roi, coverage, head_midline, margin_vox  # noqa: E402
+from topocnv.data.v4_splits import N_INNER, inner_folds, internal_split  # noqa: E402
 
 AMENDMENT = "D1-AM2"
 MIN_VALID_D = 90          # as D1-AM1 (tools/v4_qc_d1.py)

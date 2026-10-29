@@ -6,8 +6,8 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from trainer.v4.losses import MaskedWeightedBCEDice, VisibilityLoss, skeleton_recall_loss  # noqa: E402
-from npc_losses import WeightedBCEDiceLoss  # noqa: E402
+from topocnv.losses import MaskedWeightedBCEDice, VisibilityLoss, skeleton_recall_loss  # noqa: E402
+from topocnv.losses import WeightedBCEDiceLoss  # noqa: E402
 
 
 def sota_loss(cw):

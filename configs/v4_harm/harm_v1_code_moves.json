@@ -1,0 +1,54 @@
+{
+ "status": "verified",
+ "date": "2026-10-29",
+ "calibrated_commit": "85a6f2d5ee7420f33db65fa39d6ee47233d25ba8",
+ "why": "harm_v1.json stays byte-frozen (its sha256 is in the cache manifest, the v42_meta of 540/541/557, the done markers and the run records); the V5 move relocated the rule module and rewrote the build tool's imports, so harm_cache() accepts the two entries below instead of a byte match and still pins the current files by sha256.",
+ "moves": {
+  "trainer/v4/harmonize.py": {
+   "calibrated_sha256": "bbd4e343a270d94db4d56cdd00975d303185907f6a4f1a2a5366ebffa3336c79",
+   "current_path": "topocnv/data/harmonize.py",
+   "current_sha256": "c15b22bd7992a365b6d88e504a4183d7e4cd32944363bad8d996fdef8b6d0086",
+   "check": "behaviour",
+   "evidence": {
+    "cases": [
+     "00801656",
+     "01027038",
+     "01501509",
+     "01630944",
+     "02270253",
+     "03843563",
+     "2200963197",
+     "2300369442",
+     "00816783",
+     "00894361",
+     "00932515",
+     "00957903"
+    ],
+    "t": [
+     0.1,
+     0.19,
+     0.3
+    ],
+    "arrays_compared": 36,
+    "mismatches": 0
+   }
+  },
+  "tools/v4_harmonize_labels.py": {
+   "calibrated_sha256": "eee13e11dd3498987b886f8482859263b674c9be73e710e96db7858ff81eecd8",
+   "current_path": "tools/v4_harmonize_labels.py",
+   "current_sha256": "b18057f8bdd0d2eb41fec67e52cd9c893238c309ce3a9ec9c4ddb9180c082c87",
+   "check": "imports-only",
+   "evidence": {
+    "diff": [
+     "--- calibrated/tools/v4_harmonize_labels.py",
+     "+++ current/tools/v4_harmonize_labels.py",
+     "@@ -92,3 +92,3 @@",
+     "            \"date_window\": window, \"source_cache\": str(CACHE_DIR),",
+     "-           \"code_sha256\": {\"trainer/v4/harmonize.py\": sha(REPO / \"trainer\" / \"v4\" / \"harmonize.py\"),",
+     "+           \"code_sha256\": {\"topocnv/data/harmonize.py\": sha(REPO / \"topocnv\" / \"data\" / \"harmonize.py\"),",
+     "                            \"tools/v4_harmonize_labels.py\": sha(Path(__file__).resolve())}}"
+    ]
+   }
+  }
+ }
+}

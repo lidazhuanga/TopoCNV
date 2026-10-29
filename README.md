@@ -155,6 +155,19 @@ CN V 在颅底的走行在计划 CT 上只部分可见：骨性孔道附近证�
 
 消融臂、安装、数据格式与运行命令见上方英文部分。
 
+## 计划与结果文档
+
+| 文档 | 内容 |
+|---|---|
+| `docs/V4_PLAN.md` | V4 实现计划与修订记录（V4.0–V4.3 修正案、选择规则、执行门） |
+| `docs/V4_DEV_LOG.md` | V4 开发日志（每轮实际跑过的配置与读数） |
+| `docs/V5_PLAN.md` | V5 研究计划：先证明 MRI 有用，再学习何时使用 MRI |
+| `docs/c3w_tables_20261027.md` | class-3 参考证据加权的次级评价表 |
+| `docs/MECHANISM_ANALYSIS.md` | 机制分析（擦除、去 memory）说明 |
+| `results/README.md` | 入库的汇总结果清单与重算约定 |
+
+主结果汇总表：`results/p0_binary_y_eval_v2/P0_main_table.md`（P0 六臂）、`results/sota_binary_y_eval/SOTA_main_table.md`（SOTA 对照）、`results/DEV_main_table.md`（V4 开发阶段）。逐病例评分与预测体积不在仓库内。
+
 ## 数据可用性
 
 影像数据不公开存放。如需使用，请联系通讯作者（yansenxiang@zju.edu.cn）。

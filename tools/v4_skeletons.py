@@ -18,8 +18,9 @@ import numpy as np
 from scipy import ndimage as ndi
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from trainer.v4.common import SKEL_DIR, expand_box, load_label, mask_bbox, mask_Y  # noqa: E402
-from trainer.v4.splits import all_cases  # noqa: E402
+from topocnv.data.utils import SKEL_DIR, load_label  # noqa: E402
+from topocnv.utils.box_ops import expand_box, mask_bbox, mask_Y  # noqa: E402
+from topocnv.data.v4_splits import all_cases  # noqa: E402
 
 
 def tubed_skeleton(y):

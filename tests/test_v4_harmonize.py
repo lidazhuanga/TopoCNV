@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from trainer.v4.harmonize import harmonise, run_length, thickness  # noqa: E402
+from topocnv.data.harmonize import harmonise, run_length, thickness  # noqa: E402
 
 HAS_SKIMAGE = importlib.util.find_spec("skimage") is not None
 

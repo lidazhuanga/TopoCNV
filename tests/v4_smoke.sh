@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export V4_PRIORS_DIR=$PWD/results/v4_smoke/priors
 CASES=$(python -c "
-from trainer.v4.splits import internal_split, report_cases
+from topocnv.data.v4_splits import internal_split, report_cases
 tr, iv = internal_split(0); print(','.join(tr[:2] + iv[:2] + report_cases(0)[:1]))")
 echo "smoke cases: $CASES"
 for j in 0 1 2; do
@@ -19,10 +19,11 @@ python -m trainer.v4.train_stage2 --config tests/smoke_full.yaml --fold 0 --smok
 python - <<'EOF'
 import torch
 from pathlib import Path
-from trainer.v4.common import RESULTS, load_config
-from trainer.v4.model import build_dynunet, stage2_channels
-from trainer.v4.splits import internal_split
-from trainer.v4.train_stage2 import score_cases
+from topocnv.data.utils import RESULTS
+from topocnv.config.loader import load_config
+from topocnv.models.builder import build_dynunet, stage2_channels
+from topocnv.data.v4_splits import internal_split
+from topocnv.scripts.v4_train_stage2 import score_cases
 cfg = load_config("tests/smoke_full.yaml")
 dev = torch.device("cuda")
 m = build_dynunet(*stage2_channels(cfg)).to(dev)

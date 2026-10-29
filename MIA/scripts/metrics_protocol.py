@@ -548,7 +548,7 @@ def load_raw_hu_dhw(
 
     if target_spacing_zyx is not None:
         try:
-            import npc_preprocess as pp
+            import topocnv.data.preprocess as pp
             hu = pp.resample_image_to_spacing(
                 hu, orig_sp, tuple(target_spacing_zyx), order=1
             ).astype(np.float32)

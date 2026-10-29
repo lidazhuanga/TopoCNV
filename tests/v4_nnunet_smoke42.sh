@@ -34,7 +34,7 @@ echo "== [smoke42 1/5] case list =="
 # s1 dev fold 0 inner 0: train = inner folds 1, 2, val = inner fold 0 (V_0 is held out of Stage 1)
 read -r CASES VCASE S1VAL < <($PY -c "
 import json, sys; sys.path.insert(0, '.')
-from trainer.v4.splits import inner_folds, internal_split
+from topocnv.data.v4_splits import inner_folds, internal_split
 man = json.load(open('$HARM/manifest.json'))['cases']
 inner = [inner_folds(0, tier='dev')[j][0] for j in range(3)]
 v = next(c for c in internal_split(0)[1] if man[c]['thin'])
@@ -63,7 +63,7 @@ import nibabel as nib
 import numpy as np
 
 sys.path.insert(0, ".")
-from trainer.v4.common import CACHE_DIR
+from topocnv.data.utils import CACHE_DIR
 
 c = sys.argv[1]
 fd = (Path(os.environ["CNV_NNUNET_HOME"]) / "nnUNet_results" / "Dataset541_CNVv42s1"

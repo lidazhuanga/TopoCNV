@@ -36,7 +36,7 @@ MARKS_BEFORE=$(marks)
 echo "== [smoke42p 1/5] case list =="
 read -r CASES VCASE S1VAL < <($PY -c "
 import sys; sys.path.insert(0, '.')
-from trainer.v4.splits import inner_folds, internal_split
+from topocnv.data.v4_splits import inner_folds, internal_split
 inner = [inner_folds(0, tier='dev')[j][0] for j in range(3)]
 v = internal_split(0)[1][0]
 print(','.join(inner + [v]), v, inner[0])")

@@ -58,9 +58,10 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from trainer.v4.common import (CACHE_DIR, PRIORS_DIR, RESULTS, SPACING, boxes_mask, box_slices,  # noqa: E402
-                               case_shift, region_from_box, union_box)
-from trainer.v4.splits import (N_INNER, all_cases, inner_folds, internal_split, report_cases,  # noqa: E402
+from topocnv.data.utils import CACHE_DIR, PRIORS_DIR, RESULTS, SPACING  # noqa: E402
+from topocnv.utils.box_ops import (boxes_mask, box_slices, case_shift, region_from_box,  # noqa: E402
+                                   union_box)
+from topocnv.data.v4_splits import (N_INNER, all_cases, inner_folds, internal_split, report_cases,  # noqa: E402
                                 stage1_train_cases, train_cases)
 
 NNUNET_HOME = Path(os.environ.get("CNV_NNUNET_HOME", Path.home() / "cnv" / "nnunet_cnv"))
@@ -74,6 +75,7 @@ V42 = {"binY": (540, "Dataset540_CNVv42binY"), "s1": (541, "Dataset541_CNVv42s1"
 R0_TRAINER = "nnUNetTrainer_300epochs"
 SMOKE_STOCK = "nnUNetTrainer_SMOKE_2x5"   # stock trainer, 2 epochs x 5 iterations (tests/v4_nnunet_smoke42.sh)
 HARM_DIRECTION = ROOT / "configs" / "v4_harm" / "harm_v1_direction.json"   # user confirmation, V4_PLAN §11.9
+HARM_MOVES = ROOT / "configs" / "v4_harm" / "harm_v1_code_moves.json"   # where harm_v1's code lives after the V5 move
 
 
 def env():
@@ -400,6 +402,23 @@ def _label_sha(a):
     return c, hashlib.sha256(np.ascontiguousarray(lab).tobytes()).hexdigest()   # = arr_sha of the build
 
 
+def _assert_code(rel, want):
+    """The calibrated file still hashes to `want`; a file the V5 move relocated is accepted only through
+    configs/v4_harm/harm_v1_code_moves.json, which pins the new path, its sha256 and the equivalence evidence
+    (tools/v4_harm_code_moves.py). harm_v1.json itself stays byte-frozen: its sha256 is in the cache manifest,
+    the v42_meta of 540/541/557, the done markers and the run records."""
+    p = ROOT / rel
+    if p.exists() and hashlib.sha256(p.read_bytes()).hexdigest() == want:
+        return
+    moves = json.loads(HARM_MOVES.read_text()) if HARM_MOVES.exists() else {}
+    m = (moves.get("moves") or {}).get(rel)
+    assert moves.get("status") == "verified" and m, f"{rel} changed since calibration"
+    assert m["calibrated_sha256"] == want, f"{rel}: the code-moves record was made for another calibration"
+    cur = ROOT / m["current_path"]
+    assert cur.exists() and hashlib.sha256(cur.read_bytes()).hexdigest() == m["current_sha256"], \
+        f"{rel} -> {m['current_path']} changed since the code-moves record: rerun tools/v4_harm_code_moves.py"
+
+
 def harm_cache(verify=True):
     """The frozen harmonised label cache (tools/v4_harmonize_labels.py); refuses an unbuilt or mismatched one.
 
@@ -415,7 +434,7 @@ def harm_cache(verify=True):
     man = json.loads((cache / "manifest.json").read_text())
     assert man["config_sha256"] == sha, "harmonised cache was built from a different harm_v1.json"
     for rel, want in json.loads(cfg)["code_sha256"].items():     # rule and build code, as calibrated
-        assert hashlib.sha256((ROOT / rel).read_bytes()).hexdigest() == want, f"{rel} changed since calibration"
+        _assert_code(rel, want)
     assert sorted(man["cases"]) == sorted(all_cases()), "manifest cases != the study cases"
     if verify:
         from multiprocessing import Pool

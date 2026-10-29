@@ -28,9 +28,10 @@ import numpy as np
 from scipy.ndimage import distance_transform_edt, label as cc_label
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "MIA" / "scripts"))
 import ablation_configs as ac  # noqa: E402
-from metrics_protocol import DEFAULT_SPACING_ZYX, _dice, dilate_mm  # noqa: E402
+from topocnv.metrics.protocol import DEFAULT_SPACING_ZYX, _dice, dilate_mm  # noqa: E402
 
 GT_CACHE = Path(ac.RESULTS_ROOT) / "preprocess_cache" / "sp_2.500_1.133_1.133"
 S1_DIR = Path(ac.STAGE1_CV_DIR)

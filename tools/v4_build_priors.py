@@ -30,13 +30,13 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from trainer.v4.common import (PRIOR_BOX_MARGIN, PRIORS_DIR, STAGE1_DIR, load_image,  # noqa: E402
-                               load_label)
-from trainer.v4.priors import (Atlas, atlas_roi_record, bilateral_c4_distance_mm,  # noqa: E402
+from topocnv.data.utils import (PRIOR_BOX_MARGIN, PRIORS_DIR, STAGE1_DIR, load_image,  # noqa: E402
+                                load_label)
+from topocnv.priors import (Atlas, atlas_roi_record, bilateral_c4_distance_mm,  # noqa: E402
                                build_case_priors, choose_template, prior_box_from_rec,
                                side_c4_centroids)
-from trainer.v4.roi import compute_case_roi, head_midline, landmark_mask_from_probs  # noqa: E402
-from trainer.v4.splits import N_INNER, all_cases, internal_split, stage1_source, train_cases  # noqa: E402
+from topocnv.priors.roi import compute_case_roi, head_midline, landmark_mask_from_probs  # noqa: E402
+from topocnv.data.v4_splits import N_INNER, all_cases, internal_split, stage1_source, train_cases  # noqa: E402
 
 ATLAS = None
 FOLD = None

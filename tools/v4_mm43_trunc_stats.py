@@ -19,8 +19,8 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from trainer.v4.common import CACHE_DIR, RESULTS  # noqa: E402
-from trainer.v4.splits import all_cases  # noqa: E402
+from topocnv.data.utils import CACHE_DIR, RESULTS  # noqa: E402
+from topocnv.data.v4_splits import all_cases  # noqa: E402
 
 MRI = Path.home() / "cnv" / "mri" / "cache"
 HARM = RESULTS / "v4_harm_v1" / CACHE_DIR.name

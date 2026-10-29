@@ -4,13 +4,13 @@
   PY=~/cnv/envs/nnunetv2_cnv/bin/python
   $PY tools/v4_mm43.py install43                      # trainer/v4/nnunet/nnUNetTrainerV43.py -> venv (symlink)
   $PY tools/v4_mm43.py prep43 --what mm               # Dataset557: CT + MRI + valid mask, binary Y (harm_v1)
-  $PY tools/v4_mm43.py prep43 --what shuf             # Dataset558: MRI + mask of another case (derangement)
+  $PY tools/v4_mm43.py prep43 --what shuf --fold 0 --variant report
   $PY tools/v4_mm43.py train43 --what mm --fold 0 --variant dev --trainer nnUNetTrainerV43_MMd1 --name v43_mmd1
 
 Data: the frozen MRI cache ~/cnv/mri/cache (FROZEN + SHA256SUMS, cnv-mri-prep). prep43 checks every listed
 file against SHA256SUMS and records the sha256 of SHA256SUMS itself; train43 refuses a dataset whose record
-differs from the cache's current SHA256SUMS. CT and labels are links to Dataset540; splits_final.json is a copy of
-540's (0-4 report fold k, 5-9 dev fold k); plans = 540's with the channel fields widened to 3 (NoNormalization).
+differs from the cache's current SHA256SUMS. CT and labels are links to Dataset540. MM copies 540's splits;
+MM-shuf uses a separate dataset and one split per fold/variant, with donors drawn only from that training pool.
 Outputs: validation_v4/ -> results/v4_dev_preds/<name>/fold{k} (each case's MRI) and validation_v4_nomri/ ->
 <name>_nomri/fold{k} (no MRI for any case); report tier -> results/v4_<name>[_nomri]_label_predictions.
 Queue marker log/v4/nn43_<name>_{variant}_f{k}.done after both exports. Smoke trainers and case subsets write
@@ -31,17 +31,29 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
 import v4_nnunet as N  # noqa: E402
-from trainer.v4.common import CACHE_DIR, RESULTS  # noqa: E402
-from trainer.v4.splits import all_cases, internal_split, report_cases  # noqa: E402
+from topocnv.data.utils import CACHE_DIR, RESULTS  # noqa: E402
+from topocnv.data.v4_splits import all_cases, internal_split, report_cases  # noqa: E402
 
 PROTOCOL = "V4.3 / V4-AM-20261028-03"
 MRI_ROOT = Path(os.environ.get("V43_MRI_ROOT", str(Path.home() / "cnv" / "mri")))   # override: tests
 MRI_CACHE = MRI_ROOT / "cache"
-V43 = {"mm": (557, "Dataset557_CNVv43mm"), "shuf": (558, "Dataset558_CNVv43mmshuf")}
+V43 = {"mm": (557, "Dataset557_CNVv43mm")}
 N_CH = 3
 SHUF_SEED = 20261028
+SHUF_DATASET_BASE = 559
+SHUF_POLICY = "train_pool_v1"
 FROZEN43 = ROOT / "configs" / "v4_frozen43"
 MRI_TRAINER_PREFIX = "nnUNetTrainerV43_"
+
+
+def dataset43(what, fold=None, variant=None):
+    if what == "mm":
+        return V43[what]
+    if what != "shuf" or fold is None or variant is None:
+        raise SystemExit("MM-shuf requires --fold and --variant; the global Dataset558 is unsupported")
+    split = N.v42_split_index("binY", fold, variant)
+    did = SHUF_DATASET_BASE + split
+    return did, f"Dataset{did}_CNVv43mmshuf_{variant}_f{fold}"
 
 
 # ---------------- MRI cache ----------------
@@ -118,11 +130,39 @@ def load_mri(case):
 def derangement(cases, seed=SHUF_SEED):
     """{recipient: donor}, no fixed point; the first derangement drawn from default_rng(seed)."""
     cases = sorted(cases)
+    if len(cases) < 2 or len(set(cases)) != len(cases):
+        raise ValueError("derangement needs at least two distinct cases")
     rng = np.random.default_rng(seed)
     while True:
         p = rng.permutation(len(cases))
         if not (p == np.arange(len(cases))).any():
             return {cases[i]: cases[int(p[i])] for i in range(len(cases))}
+
+
+def shuffle_assignment(fold, variant, cases=None):
+    index = N.v42_split_index("binY", fold, variant)
+    split = {key: sorted(value) for key, value in N.v42_splits("binY")[index].items()}
+    if cases is not None:
+        keep = set(cases)
+        extra = keep - set(split["train"]) - set(split["val"])
+        if extra:
+            raise SystemExit(f"MM-shuf subset contains cases outside {variant} fold {fold}: {sorted(extra)}")
+        split = {key: [c for c in value if c in keep] for key, value in split.items()}
+    if not split["train"] or not split["val"]:
+        raise SystemExit("MM-shuf needs nonempty train and validation partitions")
+    ok = reg_ok()
+    pool = [c for c in split["train"] if ok[c]]
+    val = [c for c in split["val"] if ok[c]]
+    seed = SHUF_SEED + index
+    donors = {}
+    if pool or val:
+        if len(pool) < 2:
+            raise SystemExit("MM-shuf needs at least two MRI-usable training cases; held-out donors are forbidden")
+        donors = derangement(pool, seed)
+        rng = np.random.default_rng([seed, 1])
+        donors.update(zip(val, map(str, rng.choice(pool, size=len(val), replace=len(val) > len(pool)))))
+    return {"policy": SHUF_POLICY, "fold": fold, "variant": variant, "seed": seed,
+            "split": split, "donors": donors}
 
 
 def centroid(mask):
@@ -182,10 +222,13 @@ def _write43(a):
         assert s.exists(), f"{s} missing: Dataset540 is not built"
         N._atomic_link(s, d)
     shift = None
+    if what == "shuf" and reg_ok()[case] and donor is None:
+        raise SystemExit(f"{case}: MM-shuf is missing a training-pool donor")
     if donor is None:
         mri, valid = load_mri(case)
         assert reg_ok()[case] == 1 or (not mri.any() and not valid.any()), f"{case}: reg_ok = 0 but MRI/mask not zero"
     else:
+        assert what == "shuf" and reg_ok()[case] and donor != case, f"{case}: invalid MM-shuf donor {donor}"
         mri, valid, shift = shuffled_mri(case, donor)
     for ch, arr, dt in ((1, mri, np.float32), (2, valid, np.uint8)):
         path = raw / "imagesTr" / f"{case}_{ch:04d}.nii.gz"
@@ -197,24 +240,33 @@ def _write43(a):
 
 def prep43(args):
     from multiprocessing import Pool
-    did, name = V43[args.what]
+    did, name = dataset43(args.what, getattr(args, "fold", None), getattr(args, "variant", None))
+    raw = N.NNUNET_HOME / "nnUNet_raw" / name
+    pre = N.NNUNET_HOME / "nnUNet_preprocessed" / name
+    if args.what == "shuf":
+        for folder in ("nnUNet_raw", "nnUNet_preprocessed", "nnUNet_results"):
+            existing = sorted((N.NNUNET_HOME / folder).glob(f"Dataset{did}_*"))
+            if existing:
+                raise SystemExit(f"refusing to overwrite MM-shuf dataset ID {did}: {existing}; inspect it or use a separate CNV_NNUNET_HOME")
     m540 = N.check_dataset42(N.V42["binY"][1])
     if not (ROOT / "log" / "v4" / "nnprep_540.done").exists() and not args.cases:
         raise SystemExit("Dataset540 is not complete")
     sums_sha, _ = verify_mri_cache(args.np) if not args.skip_verify else (mri_sums()[0], None)
     ok = reg_ok()
-    cases = list(all_cases())
-    raw = N.NNUNET_HOME / "nnUNet_raw" / name
-    done = ROOT / "log" / "v4" / f"nnprep_{did}.done"
-    if args.cases:
-        want = set(args.cases.split(","))
-        assert not want - set(cases), f"unknown cases: {sorted(want - set(cases))}"
-        cases = [c for c in cases if c in want]
-    else:
-        done.unlink(missing_ok=True)
-    donors = {}
+    shuffle = None
     if args.what == "shuf":
-        donors = derangement([c for c in all_cases() if ok[c]])     # over all usable cases, also for subsets
+        shuffle = shuffle_assignment(args.fold, args.variant, args.cases.split(",") if args.cases else None)
+        cases = sorted(shuffle["split"]["train"] + shuffle["split"]["val"])
+    else:
+        cases = list(all_cases())
+        if args.cases:
+            want = set(args.cases.split(","))
+            assert not want - set(cases), f"unknown cases: {sorted(want - set(cases))}"
+            cases = [c for c in cases if c in want]
+    done = ROOT / "log" / "v4" / f"nnprep_{did}.done"
+    if not args.cases:
+        done.unlink(missing_ok=True)
+    donors = shuffle["donors"] if shuffle else {}
     (raw / "imagesTr").mkdir(parents=True, exist_ok=True)
     (raw / "labelsTr").mkdir(parents=True, exist_ok=True)
     have = ({p.name.rsplit("_", 1)[0] for p in (raw / "imagesTr").glob("*.nii.gz")}
@@ -235,7 +287,7 @@ def prep43(args):
         "labels": {"background": 0, "Y": 1}, "numTraining": len(cases), "file_ending": ".nii.gz",
         "overwrite_image_reader_writer": "NibabelIO",
         "description": f"CN V V4.3 ({args.what}): cache CT + MRI ([0,1]) + MRI valid mask (fov AND reg_ok)"
-                       f"{', MRI and mask of another case (derangement)' if args.what == 'shuf' else ''}, "
+                       f"{', MRI and mask of a training-pool donor' if args.what == 'shuf' else ''}, "
                        f"binary Y from {N.HARM_DIR.name}, {len(cases)} cases"}, indent=2))
     N._atomic_text(raw / "v42_meta.json", json.dumps({
         "what": f"mm43_{args.what}", "protocol": PROTOCOL, "harm_cache": m540["harm_cache"],
@@ -243,19 +295,21 @@ def prep43(args):
         "image_digest": m540["image_digest"], "mri_cache": str(MRI_CACHE), "mri_sums_sha256": sums_sha,
         "mri_frozen": (MRI_CACHE / "FROZEN").read_text().strip(),
         "mri_digest": N._digest({c: rec[c]["mri_sha"] + rec[c]["valid_sha"] for c in rec}),
-        "shuffle_seed": SHUF_SEED if args.what == "shuf" else None,
+        "shuffle_seed": shuffle["seed"] if shuffle else None, "shuffle": shuffle, "partial": bool(args.cases),
         "tool_sha256": N._file_sha(Path(__file__).resolve()), "versions": N._versions(),
         "created": datetime.now().isoformat(), "cases": rec}, indent=1))
-    pre = N.NNUNET_HOME / "nnUNet_preprocessed" / name
     pre.mkdir(parents=True, exist_ok=True)
     src_pre = N.NNUNET_HOME / "nnUNet_preprocessed" / N.V42["binY"][1]
     N._atomic_text(pre / f"{N.PLANS}.json", json.dumps(widen_plans3(src_pre / f"{N.PLANS}.json", name), indent=2))
     N._atomic_text(pre / "dataset.json", (raw / "dataset.json").read_text())
-    splits = json.loads((src_pre / "splits_final.json").read_text())
-    if args.cases:
-        keep = set(cases)
-        splits = [{"train": [c for c in e["train"] if c in keep], "val": [c for c in e["val"] if c in keep]}
-                  for e in splits]
+    if shuffle:
+        splits = [shuffle["split"]]
+    else:
+        splits = json.loads((src_pre / "splits_final.json").read_text())
+        if args.cases:
+            keep = set(cases)
+            splits = [{"train": [c for c in e["train"] if c in keep], "val": [c for c in e["val"] if c in keep]}
+                      for e in splits]
     N._atomic_text(pre / "splits_final.json", json.dumps(splits, indent=1))
     subprocess.run([N.bin_cmd("nnUNetv2_preprocess"), "-d", str(did), "-plans_name", N.PLANS, "-c", N.CONFIG,
                     "-np", str(args.np)], env=N.env(), check=True)
@@ -273,12 +327,28 @@ def prep43(args):
     print(f"prepared {name}")
 
 
-def check_dataset43(name):
-    """check_dataset42 (harm_v1 direction and labels), plus: the MRI cache is still the one the dataset was built from."""
+def check_dataset43(name, fold=None, variant=None):
+    """Check label/MRI provenance and the exact training-pool donor assignment for MM-shuf."""
     meta = N.check_dataset42(name)
     assert meta.get("protocol") == PROTOCOL and meta.get("what", "").startswith("mm43_"), f"{name} is not a V4.3 dataset"
     sums_sha, _ = mri_sums()
     assert meta["mri_sums_sha256"] == sums_sha, f"{name}: the MRI cache's SHA256SUMS changed since the build"
+    if meta["what"] == "mm43_shuf":
+        if name != dataset43("shuf", fold, variant)[1]:
+            raise SystemExit(f"{name}: MM-shuf dataset does not match the requested fold/variant")
+        expected = shuffle_assignment(fold, variant, list(meta["cases"]) if meta.get("partial") else None)
+        if meta.get("shuffle") != expected or meta.get("shuffle_seed") != expected["seed"]:
+            raise SystemExit(f"{name}: legacy/global or mismatched MM-shuf donors; rebuild a fold-specific dataset")
+        assert sorted(meta["cases"]) == sorted(expected["split"]["train"] + expected["split"]["val"]), \
+            f"{name}: MM-shuf case set does not match its split"
+        ok = reg_ok()
+        for case, rec in meta["cases"].items():
+            assert rec.get("donor") == expected["donors"].get(case), f"{case}: MM-shuf donor mismatch"
+            assert rec["reg_ok"] == ok[case], f"{case}: MRI availability changed"
+        splits = json.loads((N.NNUNET_HOME / "nnUNet_preprocessed" / name / "splits_final.json").read_text())
+        assert splits == [expected["split"]], f"{name}: MM-shuf requires exactly its own split at index 0"
+    elif name != V43["mm"][1] or meta["what"] != "mm43_mm":
+        raise SystemExit(f"{name}: dataset identity does not match the V4.3 arm")
     return meta
 
 
@@ -313,15 +383,17 @@ def results_dirs(fd):
 
 
 def train43(args):
-    did, name = V43[args.what]
     k, variant, trainer = args.fold, args.variant, args.trainer
+    did, name = dataset43(args.what, k, variant)
     if not args.name:
         raise SystemExit("--name is required")
     frozen_sha = check_trainer(args.what, k, variant, trainer)
-    meta = check_dataset43(name)
+    meta = check_dataset43(name, k, variant)
+    if args.what == "shuf" and meta.get("partial") and "SMOKE" not in trainer:
+        raise SystemExit("a partial MM-shuf dataset is for smoke trainers only")
     cls = N.trainer_class(trainer)
     assert any(c.__name__ == "nnUNetTrainerV43" for c in cls.__mro__), f"{trainer} is not a V4.3 trainer"
-    split = N.v42_split_index("binY", k, variant)
+    split = 0 if args.what == "shuf" else N.v42_split_index("binY", k, variant)
     splits = json.loads((N.NNUNET_HOME / "nnUNet_preprocessed" / name / "splits_final.json").read_text())
     assert split < len(splits) and splits[split]["train"] and splits[split]["val"], f"{name}: no split {split}"
     fd = N.results_dir(did, name, trainer, split)
@@ -346,7 +418,8 @@ def train43(args):
     if cmd:
         N._log_run(fd, trainer, cls, meta, cmd, extra={"mm43": {
             "protocol": PROTOCOL, "dataset": name, "mri_sums_sha256": meta["mri_sums_sha256"],
-            "mri_digest": meta["mri_digest"], "frozen43_sha256": frozen_sha}})
+            "mri_digest": meta["mri_digest"], "frozen43_sha256": frozen_sha,
+            "shuffle": meta.get("shuffle")}})
         print(" ".join(cmd), flush=True)
         subprocess.run(cmd, env=N.env(), check=True)
     export43(args, fd, trainer, meta)
@@ -414,13 +487,15 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("install43")
     p = sub.add_parser("prep43")
-    p.add_argument("--what", choices=sorted(V43), required=True)
+    p.add_argument("--what", choices=["mm", "shuf"], required=True)
+    p.add_argument("--fold", type=int, choices=range(5), help="required for MM-shuf")
+    p.add_argument("--variant", choices=["dev", "report"], help="required for MM-shuf")
     p.add_argument("--np", type=int, default=8)
     p.add_argument("--cases", default="", help="comma list (smoke tests): tiny dataset of these cases only")
     p.add_argument("--skip_verify", action="store_true", help="smoke only: skip re-hashing the MRI cache")
     t = sub.add_parser("train43")
-    t.add_argument("--what", choices=sorted(V43), required=True)
-    t.add_argument("--fold", type=int, required=True)
+    t.add_argument("--what", choices=["mm", "shuf"], required=True)
+    t.add_argument("--fold", type=int, choices=range(5), required=True)
     t.add_argument("--variant", choices=["dev", "report"], required=True)
     t.add_argument("--trainer", required=True)
     t.add_argument("--name", required=True)

@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from trainer.v4.common import load_config, save_config  # noqa: E402
+from topocnv.config.loader import load_config, save_config  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 DEV = ROOT / "configs" / "v4_dev"

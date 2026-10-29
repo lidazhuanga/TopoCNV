@@ -6,8 +6,8 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from trainer.v4.common import SPACING  # noqa: E402
-from trainer.v4.roi import clean_cluster, compute_case_roi, coverage, margin_vox, roi_boxes  # noqa: E402
+from topocnv.data.utils import SPACING  # noqa: E402
+from topocnv.priors.roi import clean_cluster, compute_case_roi, coverage, margin_vox, roi_boxes  # noqa: E402
 
 
 def synthetic():

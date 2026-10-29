@@ -16,10 +16,11 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from trainer.v4.common import MARGINS_MM, REPO, RESULTS, load_label, mask_Y  # noqa: E402
-from trainer.v4.data import load_roi_record  # noqa: E402
-from trainer.v4.roi import coverage  # noqa: E402
-from trainer.v4.splits import internal_split, report_cases  # noqa: E402
+from topocnv.data.utils import MARGINS_MM, REPO, RESULTS, load_label  # noqa: E402
+from topocnv.utils.box_ops import mask_Y  # noqa: E402
+from topocnv.data.v4_dataset import load_roi_record  # noqa: E402
+from topocnv.priors.roi import coverage  # noqa: E402
+from topocnv.data.v4_splits import internal_split, report_cases  # noqa: E402
 
 
 def main():

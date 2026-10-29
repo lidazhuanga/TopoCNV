@@ -1,5 +1,5 @@
 #!/bin/bash
-# V4.3 smoke (V4_PLAN §12): tiny Dataset540/557/558 copies in a scratch nnU-Net home, then on one GPU,
+# V4.3 smoke (V4_PLAN §12): tiny CT/MM/fold-specific MM-shuf datasets in a scratch nnU-Net home, then on one GPU,
 # 2 epochs x 5 iterations with strong dropout (nnUNetTrainerV43_SMOKE_MMd):
 #   1. prep43 mm / shuf: channels as built (MRI in [0, 1], mask 0/1, CT = Dataset540's, reg_ok = 0 case all zero,
 #      shuffled channels = shuffled_mri of the derangement donor)
@@ -37,10 +37,10 @@ MARKS_BEFORE=$(marks)
 $NNPY -c "import nnunetv2.training.nnUNetTrainer.variants.zz_cnv_v4.nnUNetTrainerV43" \
   || { echo "V4.3 trainer not installed: run tools/v4_mm43.py install43"; exit 1; }
 
-echo "== [smoke43 1/5] cases, Dataset540 / 557 / 558 subsets =="
+echo "== [smoke43 1/5] cases, CT / MM / fold-specific MM-shuf subsets =="
 read -r CASES VCASE ZCASE < <($PY -c "
 import sys; sys.path.insert(0, '.')
-from trainer.v4.splits import internal_split
+from topocnv.data.v4_splits import internal_split
 tr, v = internal_split(0)
 z = '2500546042'                       # reg_ok = 0 (no MR): MRI and mask all zero
 assert z in tr or z in v, z
@@ -49,9 +49,8 @@ print(','.join(cases), v[0], z)")
 echo "cases $CASES (V_0 case $VCASE, reg_ok = 0 case $ZCASE)"
 timeout 1800 $NNPY tools/v4_nnunet.py prep42 --what binY --cases "$CASES" --np 4 | tail -1
 timeout 1800 $NNPY tools/v4_mm43.py prep43 --what mm --cases "$CASES" --np 4 --skip_verify | tail -1
-timeout 1800 $NNPY tools/v4_mm43.py prep43 --what shuf --cases "$CASES" --np 4 --skip_verify | tail -1
+timeout 1800 $NNPY tools/v4_mm43.py prep43 --what shuf --fold 0 --variant dev --cases "$CASES" --np 4 --skip_verify | tail -1
 $NNPY - "$CASES" "$ZCASE" <<'EOF'
-import json
 import sys
 
 import nibabel as nib
@@ -63,10 +62,12 @@ import v4_nnunet as N
 
 cases, z = sys.argv[1].split(","), sys.argv[2]
 from nnunetv2.training.dataloading.nnunet_dataset import nnUNetDataset
+shuf_name = M.dataset43("shuf", 0, "dev")[1]
 pre = {w: N.NNUNET_HOME / "nnUNet_preprocessed" / n / f"{N.PLANS}_{N.CONFIG}"
-       for w, n in (("540", N.V42["binY"][1]), ("mm", M.V43["mm"][1]), ("shuf", M.V43["shuf"][1]))}
+       for w, n in (("540", N.V42["binY"][1]), ("mm", M.V43["mm"][1]), ("shuf", shuf_name))}
 ds = {w: nnUNetDataset(str(p), case_identifiers=cases) for w, p in pre.items()}
-meta_shuf = json.loads((N.NNUNET_HOME / "nnUNet_raw" / M.V43["shuf"][1] / "v42_meta.json").read_text())
+meta_shuf = M.check_dataset43(shuf_name, 0, "dev")
+train_pool = set(meta_shuf["shuffle"]["split"]["train"])
 for c in cases:
     d540, _, p540 = ds["540"].load_case(c)
     for w in ("mm", "shuf"):
@@ -85,12 +86,12 @@ for c in cases:
             assert not np.asarray(d[1]).any() and not m.any(), (c, w, "reg_ok = 0 case is not all zero")
     if c != z:
         donor = meta_shuf["cases"][c]["donor"]
-        assert donor != c, c
+        assert donor != c and donor in train_pool and donor != z, (c, donor)
         mri, valid, shift = M.shuffled_mri(c, donor)
-        raw = N.NNUNET_HOME / "nnUNet_raw" / M.V43["shuf"][1] / "imagesTr"
+        raw = N.NNUNET_HOME / "nnUNet_raw" / shuf_name / "imagesTr"
         back = np.asarray(nib.load(str(raw / f"{c}_0001.nii.gz")).dataobj).transpose(2, 1, 0)
-        assert np.array_equal(back, mri) and shift == meta_shuf["cases"][c]["shift"], (c, "558 MRI != shuffled_mri")
-print(f"557/558 channels OK for {cases}")
+        assert np.array_equal(back, mri) and shift == meta_shuf["cases"][c]["shift"], (c, "MM-shuf MRI != shuffled_mri")
+print(f"MM/fold-specific MM-shuf channels OK for {cases}")
 EOF
 
 echo "== [smoke43 2/5] train43 (smoke trainer, strong dropout) =="

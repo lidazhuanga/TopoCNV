@@ -20,7 +20,7 @@ for p in (REPO / "MIA" / "scripts", REPO / "trainer", REPO):
 os.environ.setdefault("CNV_DATA_ROOT", str(REPO / "npc_data" / "train"))
 os.environ.setdefault("CNV_RESULTS_ROOT", str(REPO / "results"))
 
-import metrics_protocol as mp  # noqa: E402
+import topocnv.metrics.protocol as mp  # noqa: E402
 
 DATA_ROOT = Path(os.environ["CNV_DATA_ROOT"])
 RESULTS = Path(os.environ["CNV_RESULTS_ROOT"])

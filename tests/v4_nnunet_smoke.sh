@@ -22,9 +22,9 @@ cp "$REAL_HOME/nnUNet_preprocessed/Dataset501_CNVbinaryY/nnUNetPlans.json" \
    "$SCRATCH/nnunet/nnUNet_preprocessed/Dataset501_CNVbinaryY/"
 
 echo "== [smoke 1/5] case list =="
-CASES=$($PY -c "import sys; sys.path.insert(0,'.'); from trainer.v4.splits import inner_folds, internal_split; \
+CASES=$($PY -c "import sys; sys.path.insert(0,'.'); from topocnv.data.v4_splits import inner_folds, internal_split; \
 print(','.join([inner_folds(0, tier='dev')[j][0] for j in range(3)] + [internal_split(0)[1][0]]))")
-VCASE=$($PY -c "import sys; sys.path.insert(0,'.'); from trainer.v4.splits import internal_split; print(internal_split(0)[1][0])")
+VCASE=$($PY -c "import sys; sys.path.insert(0,'.'); from topocnv.data.v4_splits import internal_split; print(internal_split(0)[1][0])")
 echo "cases: $CASES (val case: $VCASE)"
 
 echo "== [smoke 2/5] dev-tier Stage 1 (3 inner x 3 cases x 2 epochs) =="

@@ -30,8 +30,8 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from trainer.v4.common import CACHE_DIR, RESULTS  # noqa: E402
-from trainer.v4.splits import internal_split  # noqa: E402
+from topocnv.data.utils import CACHE_DIR, RESULTS  # noqa: E402
+from topocnv.data.v4_splits import internal_split  # noqa: E402
 
 DEV_FOLDS = (0, 1, 2, 3, 4)
 PRED = RESULTS / "v4_dev_preds"

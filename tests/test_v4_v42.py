@@ -10,7 +10,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from trainer.v4.splits import (N_INNER, all_cases, inner_folds, internal_split, report_cases,  # noqa: E402
+from topocnv.data.v4_splits import (N_INNER, all_cases, inner_folds, internal_split, report_cases,  # noqa: E402
                                stage1_pool, train_cases)
 
 _spec = importlib.util.spec_from_file_location("v4_nnunet", ROOT / "tools" / "v4_nnunet.py")
@@ -188,6 +188,42 @@ class TestV42(unittest.TestCase):
                     N.harm_cache(verify=False)
             finally:
                 N.HARM_DIR, N.HARM_CFG = old
+
+    def test_harm_code_moves(self):
+        """A relocated rule/build file passes the calibration check only through a verified code-moves record
+        that pins the current path and its sha256; a drifted implementation or another calibration is refused."""
+        import hashlib
+        import json
+        old = N.ROOT, N.HARM_MOVES
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            N.ROOT, N.HARM_MOVES = d, d / "moves.json"
+            try:
+                (d / "old.py").write_text("print(1)\n")
+                (d / "new.py").write_text("print(2)\n")
+                want = hashlib.sha256((d / "old.py").read_bytes()).hexdigest()
+                N._assert_code("old.py", want)                       # byte match needs no record
+                (d / "old.py").write_text("print(3)\n")               # the move: the calibrated path changed
+                with self.assertRaises(AssertionError):               # and there is no record yet
+                    N._assert_code("old.py", want)
+                rec = {"status": "verified", "moves": {"old.py": {
+                    "calibrated_sha256": want, "current_path": "new.py",
+                    "current_sha256": hashlib.sha256((d / "new.py").read_bytes()).hexdigest()}}}
+                N.HARM_MOVES.write_text(json.dumps(rec))
+                N._assert_code("old.py", want)
+                N.HARM_MOVES.write_text(json.dumps({**rec, "status": "draft"}))
+                with self.assertRaises(AssertionError):
+                    N._assert_code("old.py", want)
+                N.HARM_MOVES.write_text(json.dumps(rec))
+                (d / "new.py").write_text("print(4)\n")               # the implementation drifted
+                with self.assertRaises(AssertionError):
+                    N._assert_code("old.py", want)
+                N.HARM_MOVES.write_text(json.dumps({"status": "verified", "moves": {"old.py": {
+                    **rec["moves"]["old.py"], "calibrated_sha256": "0" * 64}}}))
+                with self.assertRaises(AssertionError):               # record made for another calibration
+                    N._assert_code("old.py", want)
+            finally:
+                N.ROOT, N.HARM_MOVES = old
 
     def test_prep42_cases_guard(self):
         """--cases must refuse a raw dir that already holds other cases (it would rewrite their splits)."""

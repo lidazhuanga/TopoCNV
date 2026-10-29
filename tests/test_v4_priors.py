@@ -6,8 +6,9 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from trainer.v4.common import SPACING, case_shift, region_from_box  # noqa: E402
-from trainer.v4.priors import Atlas, apply_sim, dist_prior, icp_similarity  # noqa: E402
+from topocnv.data.utils import SPACING  # noqa: E402
+from topocnv.utils.box_ops import case_shift, region_from_box  # noqa: E402
+from topocnv.priors import Atlas, apply_sim, dist_prior, icp_similarity  # noqa: E402
 
 
 def rot(ax, deg):

@@ -51,10 +51,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from npc_data import DATA_ROOT_DEFAULT, _get_all_cases, _create_folds
+from topocnv.config import defaults as _defaults
+from topocnv.config.loader import from_argparse, load_json
+from topocnv.data.dataset import DATA_ROOT_DEFAULT, _get_all_cases, _create_folds
+from topocnv.data.utils import normalize_percentile, load_cached_array
+from topocnv.models.builder import build_memory_bank as _package_memory_bank, build_backbone
+from topocnv.engine.scheduler import LegacyPolyLRWithWarmup as PolyLRWithWarmup
+from topocnv.engine.amp import legacy_amp_settings
+from topocnv.engine.evaluator import legacy_sliding_window_inference, legacy_fold_mean
 # Protocol v0.3 Phase2/3 helpers
 try:
-    from cnv_protocol_s2 import (
+    from trainer.cnv_protocol_s2 import (
         stage1_softmax_to_cascade_prior, convert_label_to_Y,
         class5_bypass_ignore_mask, BinaryYLoss, BinaryYStage2Model,
         EvidenceGatedYLoss,
@@ -69,16 +76,16 @@ except ImportError:
     _HAS_PROTOCOL_S2 = False
     print("[WARN] cnv_protocol_s2 not importable")
 
-from npc_losses import WeightedBCEDiceLoss, multiclass_dice_score
-import npc_preprocess as pp
-from npc_vit_mla import ViTUNet3D, MLAMemoryBank, ContextAnchorMemoryBank, CNNDecoder3D, _DecoderBlock
-from npc_anatomy_memory import AnatomySlotMemoryBank
-from npc_anatomy_memory_v4 import AnatomySlotMemoryBankV4
-from npc_anatomy_memory_v5 import AnatomySlotMemoryBankV5
-from npc_anatomy_memory_v6 import AnatomySlotMemoryBankV6
-from npc_anatomy_memory_v4_mgp import AnatomySlotMemoryBankV4MGP
-from npc_nnformer_mla_v5 import NNFormerUNet3D
-from npc_nnunet_mla import DynUNetMLA3D, MEMORY_FEATURE_DIMS as NNUNET_MLA_MEMORY_DIMS
+from topocnv.losses import WeightedBCEDiceLoss, multiclass_dice_score
+from topocnv.data import preprocess as pp
+from topocnv.models import ViTUNet3D, MLAMemoryBank, ContextAnchorMemoryBank, CNNDecoder3D, _DecoderBlock
+from topocnv.models.memory_bank_v1 import AnatomySlotMemoryBank
+from topocnv.models.memory_bank import AnatomySlotMemoryBankV4
+from topocnv.models.memory_bank_v5 import AnatomySlotMemoryBankV5
+from topocnv.models.memory_bank_v6 import AnatomySlotMemoryBankV6
+from topocnv.models.memory_bank_mgp import AnatomySlotMemoryBankV4MGP
+from topocnv.models.nnformer_mla import NNFormerUNet3D
+from topocnv.models.dynunet_mla import DynUNetMLA3D, MEMORY_FEATURE_DIMS as NNUNET_MLA_MEMORY_DIMS
 
 try:
     from scipy.ndimage import gaussian_filter
@@ -86,15 +93,17 @@ try:
 except ImportError:
     HAS_SCIPY = False
 
+from topocnv.data.utils import build_preprocessed_cache, sample_validation_patch_positions
+
 # ==================== 配置参数 ====================
 RESULTS_ROOT = os.environ.get("CNV_RESULTS_ROOT", str(PROJECT_ROOT / "results"))
 PREPROCESS_CACHE_ROOT = str(Path(RESULTS_ROOT) / "preprocess_cache")
 _SCRIPT_STEM = Path(__file__).stem
 EXPERIMENT_NAME_STAGE1_TEMPLATE = f"{_SCRIPT_STEM}_stage1"
 EXPERIMENT_NAME_STAGE2_TEMPLATE = f"{_SCRIPT_STEM}_stage2"
-PATCH_SIZE: Tuple[int, int, int] = (40, 192, 192)
-BATCH_SIZE = 1
-GRAD_ACCUM_STEPS = 8  # Effective batch=8 for stable ViT gradients
+PATCH_SIZE: Tuple[int, int, int] = _defaults.PATCH_SIZE
+BATCH_SIZE = _defaults.BATCH_SIZE
+GRAD_ACCUM_STEPS = _defaults.GRAD_ACCUM_STEPS  # Effective batch=8 for stable ViT gradients
 NUM_CLASSES_STAGE1 = 6  # bg+1..5; class5=class5_bypass/bypass_roi (NOT bony_*)
 # CNV_PROTOCOL_V03_PHASE2
 # Exclusive 6-class soft-tree output: {0:bg, 1:c1, 2:c2, 3:c3, 4:c4, 5:c5}.
@@ -158,26 +167,10 @@ TREE_DECODER_FEATURE_DIM = VIT_EMBED_DIM  # 128
 
 # AMP configuration: bfloat16 for numerical stability (no GradScaler needed)
 # bf16 has same exponent range as fp32, preventing attention score overflow
-if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
-    AMP_DTYPE = torch.bfloat16
-    USE_GRAD_SCALER = False  # bf16 doesn't need loss scaling
-else:
-    AMP_DTYPE = torch.float16
-    USE_GRAD_SCALER = True
+AMP_DTYPE, USE_GRAD_SCALER = legacy_amp_settings()
 
 
 # ==================== 预处理函数 ====================
-def normalize_percentile(image, lower=1.0, upper=99.0, b_min=0.0, b_max=1.0, clip=True):
-    a_min = np.percentile(image, lower)
-    a_max = np.percentile(image, upper)
-    if a_max - a_min < 1e-8:
-        return np.full_like(image, (b_min + b_max) / 2, dtype=np.float32)
-    image = (image - a_min) / (a_max - a_min) * (b_max - b_min) + b_min
-    if clip:
-        image = np.clip(image, b_min, b_max)
-    return image.astype(np.float32)
-
-
 def _load_label_as_int3d(label_path) -> np.ndarray:
     """加载标签为3D int16数组, 支持NIfTI和NRRD格式"""
     label_path = Path(label_path)
@@ -273,9 +266,8 @@ def prepare_preprocessed_cache(cases, target_spacing, force=False) -> Path:
 
 
 def _load_cached_case(case_id, cache_dir, mmap=True):
-    mode = 'r' if mmap else None
-    img = np.load(Path(cache_dir) / f"{case_id}_image.npy", mmap_mode=mode)
-    lbl = np.load(Path(cache_dir) / f"{case_id}_label.npy", mmap_mode=mode)
+    img = load_cached_array(case_id, "image", mmap=mmap, cache_dir=cache_dir)
+    lbl = load_cached_array(case_id, "label", mmap=mmap, cache_dir=cache_dir)
     return img, lbl
 
 
@@ -315,36 +307,7 @@ def convert_label_to_stage2(label: np.ndarray) -> np.ndarray:
 
 
 # ==================== 学习率调度 ====================
-class PolyLRWithWarmup:
-    def __init__(self, optimizer, max_epochs, warmup_epochs=20, power=0.9,
-                 initial_lr=1e-3, warmup_start_lr=1e-5, min_lr=1e-6):
-        self.optimizer = optimizer
-        self.max_epochs = max_epochs
-        self.warmup_epochs = warmup_epochs
-        self.power = power
-        self.initial_lr = initial_lr
-        self.warmup_start_lr = warmup_start_lr
-        self.min_lr = min_lr
-        self._step = 0
-
-    def step(self):
-        self._step += 1
-        lr = self._compute_lr(self._step)
-        for pg in self.optimizer.param_groups:
-            if 'lr_scale' in pg:
-                pg['lr'] = lr * pg['lr_scale']
-            else:
-                pg['lr'] = lr
-
-    def _compute_lr(self, epoch):
-        if epoch <= self.warmup_epochs:
-            return self.warmup_start_lr + (self.initial_lr - self.warmup_start_lr) * epoch / self.warmup_epochs
-        else:
-            progress = (epoch - self.warmup_epochs) / max(self.max_epochs - self.warmup_epochs, 1)
-            return max(self.initial_lr * (1 - progress) ** self.power, self.min_lr)
-
-    def get_last_lr(self):
-        return [self._compute_lr(self._step)]
+# 调度器由兼容引擎提供；保留恢复 scheduler._step 的旧 checkpoint 契约。
 
 
 # ==================== 数据集 ====================
@@ -628,100 +591,15 @@ def _build_memory_bank(num_classes, num_prototypes_per_class, momentum, temperat
     or 'anatomical' (AnatomySlotMemoryBank: per-token soft retrieval, per-class
     Sinkhorn-balanced slot assignment, neighbor-smooth anatomical territories).
     """
-    fd = feature_dims or VIT_FEATURE_DIMS
-    if memory_type == 'anatomical_v6':
-        return AnatomySlotMemoryBankV6(
-            feature_dims=fd,
-            num_classes=num_classes,
-            kv_latent_dim=VIT_KV_LATENT_DIM,
-            num_slots_per_class=num_prototypes_per_class,
-            num_heads=VIT_NUM_HEADS,
-            head_dim=VIT_HEAD_DIM,
-            temperature=temperature,
-            top_k=top_k,
-            momentum=momentum,
-            patch_grid=MEMORY_PATCH_GRID,
-        )
-    if memory_type == 'anatomical_v4_mgp':
-        return AnatomySlotMemoryBankV4MGP(
-            feature_dims=fd,
-            num_classes=num_classes,
-            kv_latent_dim=VIT_KV_LATENT_DIM,
-            num_slots_per_class=num_prototypes_per_class,
-            num_heads=VIT_NUM_HEADS,
-            head_dim=VIT_HEAD_DIM,
-            temperature=temperature,
-            top_k=top_k,
-            momentum=momentum,
-            patch_grid=MEMORY_PATCH_GRID,
-        )
-    if memory_type == 'anatomical_v5':
-        return AnatomySlotMemoryBankV5(
-            feature_dims=fd,
-            num_classes=num_classes,
-            kv_latent_dim=VIT_KV_LATENT_DIM,
-            num_slots_per_class=num_prototypes_per_class,
-            num_heads=VIT_NUM_HEADS,
-            head_dim=VIT_HEAD_DIM,
-            temperature=temperature,
-            top_k=top_k,
-            momentum=momentum,
-            patch_grid=MEMORY_PATCH_GRID,
-        )
-    if memory_type == 'anatomical_v4':
-        return AnatomySlotMemoryBankV4(
-            feature_dims=fd,
-            num_classes=num_classes,
-            kv_latent_dim=VIT_KV_LATENT_DIM,
-            num_slots_per_class=num_prototypes_per_class,
-            num_heads=VIT_NUM_HEADS,
-            head_dim=VIT_HEAD_DIM,
-            temperature=temperature,
-            top_k=top_k,
-            momentum=momentum,
-            patch_grid=MEMORY_PATCH_GRID,
-        )
-    if memory_type == 'anatomical':
-        return AnatomySlotMemoryBank(
-            feature_dims=fd,
-            num_classes=num_classes,
-            kv_latent_dim=VIT_KV_LATENT_DIM,
-            num_slots_per_class=num_prototypes_per_class,
-            num_heads=VIT_NUM_HEADS,
-            head_dim=VIT_HEAD_DIM,
-            temperature=temperature,
-            top_k=top_k,
-            momentum=momentum,
-            patch_grid=MEMORY_PATCH_GRID,
-        )
-    if memory_type == 'context_anchor':
-        num_anchors = 8
-        protos_per_anchor = max(1, num_prototypes_per_class // num_anchors)
-        return ContextAnchorMemoryBank(
-            feature_dims=fd,
-            num_classes=num_classes,
-            kv_latent_dim=VIT_KV_LATENT_DIM,
-            num_anchors=num_anchors,
-            protos_per_anchor=protos_per_anchor,
-            num_heads=VIT_NUM_HEADS,
-            head_dim=VIT_HEAD_DIM,
-            temperature=temperature,
-            patch_grid=MEMORY_PATCH_GRID,
-            top_k=top_k,
-            momentum=momentum,
-        )
-    return MLAMemoryBank(
-        feature_dims=fd,
-        num_prototypes_per_class=num_prototypes_per_class,
-        num_classes=num_classes,
-        kv_latent_dim=VIT_KV_LATENT_DIM,
-        num_heads=VIT_NUM_HEADS,
-        head_dim=VIT_HEAD_DIM,
-        momentum=momentum,
-        temperature=temperature,
-        patch_grid=MEMORY_PATCH_GRID,
-        top_k=top_k,
+    supported = ('anatomical_v6', 'anatomical_v4_mgp', 'anatomical_v5',
+                 'anatomical_v4', 'anatomical', 'context_anchor', 'mla')
+    return _package_memory_bank(
+        num_classes, num_prototypes_per_class, momentum, temperature, top_k,
         retrieval_mode=retrieval_mode,
+        memory_type=memory_type if memory_type in supported else 'mla',
+        feature_dims=feature_dims or VIT_FEATURE_DIMS,
+        kv_latent_dim=VIT_KV_LATENT_DIM, num_heads=VIT_NUM_HEADS,
+        head_dim=VIT_HEAD_DIM, patch_grid=MEMORY_PATCH_GRID,
     )
 
 
@@ -734,37 +612,17 @@ def _build_vit(in_channels, num_classes, memory_bank=None, use_mla=True, backbon
     the identical token pyramid / feature dims / memory-bank contract, so the
     memory bank and cascade wiring are unchanged.
     """
-    common = dict(
-        in_channels=in_channels,
-        num_classes=num_classes,
-        embed_dim=VIT_EMBED_DIM,
-        stem_channels=VIT_STEM_CHANNELS,
-        tokenize_kernel=VIT_TOKENIZE_KERNEL,
-        num_heads=VIT_NUM_HEADS,
-        head_dim=VIT_HEAD_DIM,
-        kv_latent_dim=VIT_KV_LATENT_DIM,
-        encoder_depths=VIT_ENCODER_DEPTHS,
-        decoder_depths=VIT_DECODER_DEPTHS,
-        mlp_ratio=VIT_MLP_RATIO,
-        dropout=VIT_DROPOUT,
+    return build_backbone(
+        in_channels, num_classes, memory_bank=memory_bank, use_mla=use_mla,
+        backbone=backbone if backbone in ('nnunet_mla', 'nnformer_v5') else 'vit',
+        dual_path_stages=dual_path_stages, residual_conv_stages=residual_conv_stages,
+        embed_dim=VIT_EMBED_DIM, stem_channels=VIT_STEM_CHANNELS,
+        tokenize_kernel=VIT_TOKENIZE_KERNEL, num_heads=VIT_NUM_HEADS,
+        head_dim=VIT_HEAD_DIM, kv_latent_dim=VIT_KV_LATENT_DIM,
+        encoder_depths=VIT_ENCODER_DEPTHS, decoder_depths=VIT_DECODER_DEPTHS,
+        mlp_ratio=VIT_MLP_RATIO, dropout=VIT_DROPOUT,
         drop_path_rate=VIT_DROP_PATH_RATE,
-        memory_bank=memory_bank,
-        use_mla=use_mla,
     )
-    if backbone == 'nnunet_mla':
-        return DynUNetMLA3D(
-            in_channels=in_channels,
-            num_classes=num_classes,
-            num_heads=VIT_NUM_HEADS,
-            head_dim=VIT_HEAD_DIM,
-            kv_latent_dim=VIT_KV_LATENT_DIM,
-            use_mla=use_mla,
-            memory_bank=memory_bank,
-        )
-    if backbone == 'nnformer_v5':
-        return NNFormerUNet3D(dual_path_stages=dual_path_stages,
-                              residual_conv_stages=residual_conv_stages, **common)
-    return ViTUNet3D(**common)
 
 
 class Stage1Model(nn.Module):
@@ -1083,70 +941,11 @@ def sliding_window_inference(image, model, patch_size, num_classes, device, step
     exclusive 6-class distribution) as ``out[0]``; auxiliary heads are ignored at
     inference so the result is obtained directly by ``argmax`` over the output.
     """
-    model.eval()
-    orig_shape = image.shape[-3:]
-    d, h, w = orig_shape if image.ndim == 3 else image.shape[1:]
-    pd, ph, pw = patch_size
-    if image.ndim == 3:
-        image_work = image[None]
-    else:
-        image_work = image
-    C_in = image_work.shape[0]
-    nd, nh, nw = max(d, pd), max(h, ph), max(w, pw)
-    if nd != d or nh != h or nw != w:
-        padded = np.zeros((C_in, nd, nh, nw), dtype=np.float32)
-        padded[:, :d, :h, :w] = image_work
-        image_work = padded
-        d, h, w = nd, nh, nw
-    agg_results = np.zeros((num_classes, d, h, w), dtype=np.float32)
-    agg_weights = np.zeros((d, h, w), dtype=np.float32)
-    if HAS_SCIPY:
-        sigmas = [s / 8.0 for s in patch_size]
-        tmp = np.zeros(patch_size, dtype=np.float32)
-        center = tuple(s // 2 for s in patch_size)
-        tmp[center] = 1.0
-        gw = gaussian_filter(tmp, sigma=sigmas, mode='constant', cval=0.0)
-        gw = (gw / gw.max()).astype(np.float32)
-    else:
-        gw = np.ones(patch_size, dtype=np.float32)
-    import itertools
-    steps = []
-    for dim_size, p_size in zip([d, h, w], [pd, ph, pw]):
-        if dim_size <= p_size:
-            steps.append([0])
-        else:
-            step = max(int(p_size * step_size), 1)
-            pos = list(range(0, dim_size - p_size + 1, step))
-            if pos[-1] + p_size < dim_size:
-                pos.append(dim_size - p_size)
-            steps.append(pos)
-    positions = list(itertools.product(*steps))
-    for z1, y1, x1 in positions:
-        patch = image_work[:, z1:z1+pd, y1:y1+ph, x1:x1+pw]
-        patch_t = torch.from_numpy(patch[None]).float().to(device)
-        if coord_aware:
-            # Volume-normalized window coords for SPM (V5) memory bank
-            meta = torch.tensor([[z1, y1, x1, d, h, w, 0., 0., 0.]],
-                                dtype=torch.float32, device=device)
-            out = model(patch_t, None, (meta[:, 0:3], meta[:, 3:6], meta[:, 6:9]))
-        else:
-            out = model(patch_t)
-        if isinstance(out, (list, tuple)):
-            # HierarchicalStage2Model: out[0]=softmax; BinaryY: out[0]=y_prob [B,1,...]
-            prob = out[0].detach().float().cpu().numpy()[0]
-        else:
-            prob = torch.softmax(out, dim=1).detach().float().cpu().numpy()[0]
-        if prob.ndim == 3:
-            prob = prob[None]
-        n_out = min(num_classes, prob.shape[0])
-        for c in range(n_out):
-            agg_results[c, z1:z1+pd, y1:y1+ph, x1:x1+pw] += prob[c] * gw
-        agg_weights[z1:z1+pd, y1:y1+ph, x1:x1+pw] += gw
-    agg_weights = np.maximum(agg_weights, 1e-8)
-    for c in range(num_classes):
-        agg_results[c] /= agg_weights
-    main_result = agg_results[:, :orig_shape[0], :orig_shape[1], :orig_shape[2]]
-    return main_result
+    return legacy_sliding_window_inference(
+        image, model, patch_size, num_classes, device, step_size,
+        coord_aware=coord_aware,
+        gaussian_filter_fn=gaussian_filter if HAS_SCIPY else None,
+    )
 
 
 def get_curriculum_proto_weight(epoch: int, weight_start: float, weight_end: float,
@@ -2100,7 +1899,7 @@ def run_inference_external(args, device, target_spacing):
                     s1_soft = sliding_window_inference(
                         image_norm, m, PATCH_SIZE, NUM_CLASSES_STAGE1, device)
                     s1_probs_list.append(s1_soft)
-                s1_prob = np.mean(s1_probs_list, axis=0)
+                s1_prob = legacy_fold_mean(s1_probs_list)
                 if _HAS_PROTOCOL_S2:
                     prior = stage1_softmax_to_cascade_prior(s1_prob, spacing_zyx=_PROT_SPACING)
                 else:
@@ -2114,7 +1913,7 @@ def run_inference_external(args, device, target_spacing):
                 s2_soft = sliding_window_inference(
                     combined_input, m, PATCH_SIZE, n_out, device, coord_aware=use_binary_y)
                 s2_probs_list.append(s2_soft)
-            s2_prob = np.mean(s2_probs_list, axis=0)
+            s2_prob = legacy_fold_mean(s2_probs_list)
 
             if use_binary_y:
                 # Label 1 = merged CNV Y (1∪2∪3∪4)
@@ -2260,13 +2059,16 @@ def main():
     else:
         args.residual_conv_stages = [int(s) for s in _rcs.split(',') if s.strip() != '']
 
+    # 保留完整 Namespace；配置对象仅接管已确认同义的开关，不丢弃旧选项。
+    config = from_argparse(args, args.stage)
+
     # Ablation: zero out the Stage-1 prior channels (module-level switch)
     global ZERO_STAGE1_PRIOR
-    ZERO_STAGE1_PRIOR = bool(args.zero_stage1_prior)
+    ZERO_STAGE1_PRIOR = config.model.zero_stage1_prior
     global PRIOR_DROPOUT_PROB
-    PRIOR_DROPOUT_PROB = float(args.prior_dropout_prob)
+    PRIOR_DROPOUT_PROB = config.train.prior_dropout_prob
     global PRIOR_FG_ONLY
-    PRIOR_FG_ONLY = bool(args.prior_fg_only)
+    PRIOR_FG_ONLY = config.model.prior_fg_only
     global PRIOR_SCRAMBLE_MODE, B0_SINGLE_STAGE, GATE_TAU, GATE_ALPHA_FIXED, REFUSE_LEGACY_HEADS
     PRIOR_SCRAMBLE_MODE = str(getattr(args, 'prior_scramble', '0'))
     B0_SINGLE_STAGE = bool(getattr(args, 'b0_single_stage', 0))
@@ -2292,8 +2094,7 @@ def main():
 
     target_spacing = None
     if Path(SPACING_PARAMS_PATH).exists():
-        with open(SPACING_PARAMS_PATH) as f:
-            target_spacing = tuple(json.load(f)['target_spacing'])
+        target_spacing = tuple(load_json(SPACING_PARAMS_PATH)['target_spacing'])
         print(f"Target spacing: {target_spacing}")
 
     # ==================== Inference (external data) ====================

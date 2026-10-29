@@ -20,14 +20,18 @@ try:
 except ImportError:
     _nrrd = None
 
-from npc_data import DATA_ROOT_DEFAULT, get_train_val_datasets, _get_all_cases, _create_folds
-from npc_losses import BCEDiceLoss, WeightedBCEDiceLoss, multiclass_dice_score
-from npc_model import UNet3D
-import npc_preprocess as pp
+from topocnv.config.loader import load_json
+from topocnv.data.dataset import DATA_ROOT_DEFAULT, get_train_val_datasets, _get_all_cases, _create_folds
+from topocnv.losses import BCEDiceLoss, WeightedBCEDiceLoss
+from topocnv.engine.segmentation import train_supervised_epoch, evaluate_supervised_epoch, validate_with_sliding_window, compute_dice_per_class, multiclass_dice_score
+from topocnv.models.unet3d import UNet3D
+from topocnv.data import preprocess as pp
+from topocnv.engine.amp import legacy_amp_settings
 
 # Fast cached dataset (reuses preprocessed 31GB cache)
 try:
-    from npc_data_cached import CachedSOTADataset, DEFAULT_CACHE_DIR as _CACHE_DIR
+    from topocnv.data.dataset import CachedSOTADataset
+    from topocnv.data.utils import DEFAULT_CACHE_DIR as _CACHE_DIR
     HAS_CACHED_DATASET = True
 except ImportError:
     HAS_CACHED_DATASET = False
@@ -45,12 +49,7 @@ EARLY_STOP_PATIENCE = 50  # Stop if no val Dice improvement for 50 epochs
 
 # AMP configuration: bfloat16 for numerical stability (no GradScaler needed)
 # bf16 has same exponent range as fp32, preventing attention score overflow
-if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
-    AMP_DTYPE = torch.bfloat16
-    USE_GRAD_SCALER = False
-else:
-    AMP_DTYPE = torch.float16
-    USE_GRAD_SCALER = True
+AMP_DTYPE, USE_GRAD_SCALER = legacy_amp_settings()
 
 # 对于小目标神经分割,需要特制训练策略:
 # 1. 类别权重: 根据重要性设置不同权重
@@ -58,409 +57,16 @@ else:
 # 3. 高前景采样率: 确保更多神经结构被采样
 
 
-def compute_dice_per_class(pred: np.ndarray, label: np.ndarray, num_classes: int, smooth: float = 1e-5):
-    """
-    计算每个类别的Dice分数
-    
-    Args:
-        pred: 预测结果 (H, W, D)，值为类别索引
-        label: 真实标签 (H, W, D)，值为类别索引
-        num_classes: 类别数（包括背景）
-        smooth: 平滑项
-        
-    Returns:
-        包含mean和per_class的字典
-    """
-    dice_scores = []
-    
-    # 跳过背景类（class 0）
-    for c in range(1, num_classes):
-        pred_c = (pred == c).astype(np.float32)
-        label_c = (label == c).astype(np.float32)
-        
-        intersection = np.sum(pred_c * label_c)
-        union = np.sum(pred_c) + np.sum(label_c)
-        
-        if union < smooth:
-            # 如果该类别在预测和标签中都不存在，则dice为NaN
-            dice = np.nan
-        else:
-            dice = (2.0 * intersection + smooth) / (union + smooth)
-        
-        dice_scores.append(dice)
-    
-    # 计算平均Dice（忽略NaN值）
-    valid_scores = [s for s in dice_scores if not np.isnan(s)]
-    mean_dice = np.mean(valid_scores) if len(valid_scores) > 0 else 0.0
-    
-    return {
-        'mean': mean_dice,
-        'per_class': dice_scores,  # 长度为num_classes-1
-    }
 
 
 def train_one_epoch(model, loader, optimizer, loss_fn, device, scaler=None) -> Tuple[float, float]:
-    model.train()
-    total_loss = 0.0
-    total_dice = 0.0
-    num_batches = 0
-    use_amp = (AMP_DTYPE is not None)
-
-    for batch_idx, (images, labels) in enumerate(loader):
-        try:
-            images = images.to(device)
-            labels = labels.to(device)
-
-            optimizer.zero_grad()
-            if use_amp:
-                with torch.amp.autocast(device_type='cuda', dtype=AMP_DTYPE):
-                    logits = model(images)
-                    loss = loss_fn(logits, labels)
-            else:
-                logits = model(images)
-                loss = loss_fn(logits, labels)
-
-            # NaN/Inf detection
-            if torch.isnan(loss) or torch.isinf(loss):
-                print(f"  [WARN] NaN/Inf loss at batch {batch_idx}, skipping")
-                optimizer.zero_grad()
-                num_batches += 1
-                continue
-
-            if scaler is not None:
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
-
-            with torch.no_grad():
-                # Handle models that return lists (e.g., deep supervision outputs)
-                logits_for_dice = logits[0] if isinstance(logits, (list, tuple)) else logits
-                dice = multiclass_dice_score(logits_for_dice.float(), labels, include_background=False)
-
-            total_loss += loss.item()
-            total_dice += dice
-            num_batches += 1
-        except Exception as e:
-            print(f"\n[ERROR] Exception in batch {batch_idx}:")
-            print(f"  images.shape: {images.shape if images is not None else 'None'}")
-            print(f"  labels.shape: {labels.shape if labels is not None else 'None'}")
-            print(f"  labels.min: {labels.min().item() if labels is not None else 'None'}")
-            print(f"  labels.max: {labels.max().item() if labels is not None else 'None'}")
-            print(f"  labels unique values: {torch.unique(labels).cpu().numpy() if labels is not None else 'None'}")
-            raise e
-
-    if num_batches == 0:
-        return 0.0, 0.0
-    return total_loss / num_batches, total_dice / num_batches
+    return train_supervised_epoch(model, loader, optimizer, loss_fn, device, scaler=scaler, amp_dtype=AMP_DTYPE, dice_fn=multiclass_dice_score)
 
 
 def evaluate(model, loader, loss_fn, device) -> Tuple[float, float]:
-    model.eval()
-    total_loss = 0.0
-    total_dice = 0.0
-    num_batches = 0
-    use_amp = (AMP_DTYPE is not None)
-
-    with torch.no_grad():
-        for images, labels in loader:
-            images = images.to(device)
-            labels = labels.to(device)
-
-            if use_amp:
-                with torch.amp.autocast(device_type='cuda', dtype=AMP_DTYPE):
-                    logits = model(images)
-                    loss = loss_fn(logits, labels)
-            else:
-                logits = model(images)
-                loss = loss_fn(logits, labels)
-
-            # Handle models that return lists (e.g., deep supervision outputs)
-            logits_for_dice = logits[0] if isinstance(logits, (list, tuple)) else logits
-            dice = multiclass_dice_score(logits_for_dice.float(), labels, include_background=False)
-
-            total_loss += loss.item()
-            total_dice += dice
-            num_batches += 1
-
-    if num_batches == 0:
-        return 0.0, 0.0
-    return total_loss / num_batches, total_dice / num_batches
+    return evaluate_supervised_epoch(model, loader, loss_fn, device, amp_dtype=AMP_DTYPE, dice_fn=multiclass_dice_score)
 
 
-def validate_with_sliding_window(
-    model,
-    data_root: str,
-    fold: int,
-    output_dir: str,
-    patch_size: Tuple[int, int, int],
-    num_classes: int,
-    device: str,
-    spacing_params_path: str = None,
-    step_size: float = 0.5,
-    num_folds: int = 5,
-    seed: int = 42,
-    compute_metrics: bool = True,
-    normalization: str = 'ct',  # 'ct' (z-score) or 'percentile' (1-99% -> [0,1])
-):
-    """
-    使用滑窗推理对验证集进行完整预测并保存结果
-    
-    Args:
-        model: 训练好的模型
-        data_root: 数据根目录
-        fold: 验证折数
-        output_dir: 输出目录
-        patch_size: patch大小
-        num_classes: 类别数
-        device: 设备
-        spacing_params_path: spacing参数文件路径
-        step_size: 滑窗步长比例
-        num_folds: 总折数
-        seed: 随机种子
-        compute_metrics: 是否计算Dice指标
-    """
-    print("\n" + "=" * 60)
-    print("开始滑窗推理验证集...")
-    print("=" * 60)
-    
-    # 创建输出目录
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    print(f"输出目录: {output_path}")
-    
-    # 加载spacing参数
-    target_spacing = None
-    clip_lower = -200.0
-    clip_upper = 300.0
-    if spacing_params_path and Path(spacing_params_path).exists():
-        try:
-            with open(spacing_params_path, 'r') as f:
-                params = json.load(f)
-            target_spacing = tuple(params['target_spacing'])
-            clip_lower = params.get('clip_lower', clip_lower)
-            clip_upper = params.get('clip_upper', clip_upper)
-            print(f"加载target_spacing: {target_spacing}")
-            print(f"加载clip_range: [{clip_lower}, {clip_upper}] HU")
-        except Exception as e:
-            print(f"警告: 无法加载spacing参数: {e}")
-    
-    # 获取验证集病例
-    cases = _get_all_cases(data_root)
-    patient_ids = [c[0] for c in cases]
-    folds = _create_folds(patient_ids, num_folds=num_folds, seed=seed)
-    
-    val_ids = set(folds[fold])
-    val_cases = [(pid, img_path, label_path) for pid, img_path, label_path in cases if pid in val_ids]
-    
-    print(f"\n验证集病例数: {len(val_cases)}")
-    print(f"Patch size: {patch_size}")
-    print(f"Step size: {step_size}")
-    print(f"Num classes: {num_classes}\n")
-    
-    model.eval()
-    
-    # 用于存储指标
-    all_dice_scores = []
-    class_dice_scores = [[] for _ in range(num_classes - 1)]  # 不包括背景
-    
-    # 对每个病例进行推理
-    for idx, (patient_id, image_path, label_path) in enumerate(val_cases):
-        print(f"[{idx + 1}/{len(val_cases)}] 处理病例: {patient_id}")
-        
-        try:
-            # 加载图像
-            image_nii = nib.load(str(image_path))
-            image = image_nii.get_fdata().astype(np.float32)
-            
-            # 获取原始spacing
-            original_spacing = None
-            if target_spacing is not None:
-                nii_spacing = image_nii.header.get_zooms()[:3]  # (x, y, z)
-                original_spacing = (float(nii_spacing[2]), float(nii_spacing[1]), float(nii_spacing[0]))  # (z, y, x)
-                print(f"  原始spacing: {original_spacing}")
-            
-            # 转换维度顺序 (x, y, z) -> (z, x, y)
-            # 注意: transpose(2, 0, 1) 产生的是 (z, x, y) 而非 (z, y, x)
-            image = np.transpose(image, (2, 0, 1))
-            print(f"  图像shape: {image.shape} (z, x, y)")
-            print(f"  原始NIfTI shape: {image_nii.shape} (x, y, z)")
-            
-            # 滑窗推理
-            prediction = pp.sliding_window_inference(
-                image=image,
-                model=model,
-                patch_size=patch_size,
-                num_classes=num_classes,
-                step_size=step_size,
-                device=device,
-                use_gaussian=True,
-                original_spacing=original_spacing,
-                target_spacing=target_spacing,
-                clip_lower=clip_lower,
-                clip_upper=clip_upper,
-                normalization=normalization,
-            )
-            
-            print(f"  预测shape: {prediction.shape} (z, x, y)")
-            
-            # 转换回 (x, y, z) 顺序，与NIfTI格式一致
-            # 从 (z, x, y) -> (x, y, z)，正确的转换是 transpose(1, 2, 0)
-            prediction = np.transpose(prediction, (1, 2, 0))
-            print(f"  转换后shape: {prediction.shape} (x, y, z)")
-            
-            # 验证shape是否与原始图像一致
-            if prediction.shape != image_nii.shape:
-                print(f"  ⚠️  警告: 预测shape {prediction.shape} 与原始图像shape {image_nii.shape} 不匹配！")
-                print(f"       这可能是由于spacing重采样导致的差异")
-            
-            # 保存为NIfTI格式
-            pred_nii = nib.Nifti1Image(prediction, affine=image_nii.affine, header=image_nii.header)
-            
-            # 保存文件
-            output_file = output_path / f"{patient_id}_pred.nii.gz"
-            nib.save(pred_nii, str(output_file))
-            print(f"  保存到: {output_file}")
-            
-            # 计算Dice指标
-            if compute_metrics:
-                # 加载label (supports NIfTI and NRRD)
-                if str(label_path).endswith('.nrrd') and _nrrd is not None:
-                    _data, _ = _nrrd.read(str(label_path))
-                    if _data.ndim == 4:
-                        label = np.zeros(_data.shape[1:], dtype=np.int16)
-                        for _ci in range(_data.shape[0]):
-                            label[_data[_ci] > 0] = _ci + 1
-                        label = np.clip(label, 0, 5)
-                    else:
-                        label = _data.astype(np.int16)
-                else:
-                    label_nii = nib.load(str(label_path))
-                    label = label_nii.get_fdata().astype(np.int16)
-                
-                # 计算Dice
-                dice_scores = compute_dice_per_class(prediction, label, num_classes)
-                
-                # 存储结果
-                all_dice_scores.append(dice_scores['mean'])
-                for c in range(num_classes - 1):
-                    class_dice_scores[c].append(dice_scores['per_class'][c])
-                
-                # 打印当前病例的Dice
-                print(f"  Dice分数:")
-                print(f"    平均Dice: {dice_scores['mean']:.4f}")
-                print(f"    Class 1 (CN V):        {dice_scores['per_class'][0]:.4f}")
-                print(f"    Class 2 (CN V 0.5):    {dice_scores['per_class'][1]:.4f}")
-                print(f"    Class 3 (CN V 0.1):    {dice_scores['per_class'][2]:.4f}")
-                print(f"    Class 4 (through):     {dice_scores['per_class'][3]:.4f}")
-                print(f"    Class 5 (bypass):      {dice_scores['per_class'][4]:.4f}")
-                
-                # 计算神经类(1,2,3)的平均Dice
-                nerve_dice = np.mean([dice_scores['per_class'][i] for i in range(3)])
-                print(f"    神经类(1,2,3)平均: {nerve_dice:.4f}")
-            
-            print()
-            
-        except Exception as e:
-            print(f"  错误: 处理病例 {patient_id} 时出错: {e}\n")
-            import traceback
-            traceback.print_exc()
-            continue
-    
-    print("=" * 60)
-    print(f"滑窗推理完成！所有结果已保存到: {output_path}")
-    print("=" * 60)
-    
-    # 计算并显示总体指标
-    if compute_metrics and len(all_dice_scores) > 0:
-        print("\n" + "=" * 60)
-        print("验证集整体指标")
-        print("=" * 60)
-        
-        mean_dice = np.mean(all_dice_scores)
-        std_dice = np.std(all_dice_scores)
-        print(f"\n平均Dice: {mean_dice:.4f} ± {std_dice:.4f}")
-        
-        print(f"\n各类别Dice：")
-        class_names = ["CN V", "CN V 0.5", "CN V 0.1", "through", "bypass"]
-        for c, name in enumerate(class_names):
-            class_scores = [s for s in class_dice_scores[c] if not np.isnan(s)]
-            if len(class_scores) > 0:
-                mean_c = np.mean(class_scores)
-                std_c = np.std(class_scores)
-                print(f"  Class {c+1} ({name:12s}): {mean_c:.4f} ± {std_c:.4f}  (n={len(class_scores)})")
-            else:
-                print(f"  Class {c+1} ({name:12s}): N/A (无有效样本)")
-        
-        # 神经类(1,2,3)的整体指标
-        nerve_scores = []
-        for i in range(len(all_dice_scores)):
-            scores = [class_dice_scores[c][i] for c in range(3) if not np.isnan(class_dice_scores[c][i])]
-            if len(scores) > 0:
-                nerve_scores.append(np.mean(scores))
-        
-        if len(nerve_scores) > 0:
-            mean_nerve = np.mean(nerve_scores)
-            std_nerve = np.std(nerve_scores)
-            print(f"\n神经类(1,2,3)平均Dice: {mean_nerve:.4f} ± {std_nerve:.4f}")
-        
-        # 保存指标到CSV + JSON
-        metrics_file = output_path / "validation_metrics.csv"
-        with open(metrics_file, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(["patient_id", "mean_dice", "class1_CN_V", "class2_CN_V_0.5", 
-                           "class3_CN_V_0.1", "class4_through", "class5_bypass", "nerve_mean"])
-            
-            for i, (patient_id, _, _) in enumerate(val_cases):
-                if i < len(all_dice_scores):
-                    nerve_mean = np.mean([class_dice_scores[c][i] for c in range(3) 
-                                        if not np.isnan(class_dice_scores[c][i])])
-                    writer.writerow([
-                        patient_id,
-                        f"{all_dice_scores[i]:.4f}",
-                        f"{class_dice_scores[0][i]:.4f}",
-                        f"{class_dice_scores[1][i]:.4f}",
-                        f"{class_dice_scores[2][i]:.4f}",
-                        f"{class_dice_scores[3][i]:.4f}",
-                        f"{class_dice_scores[4][i]:.4f}",
-                        f"{nerve_mean:.4f}",
-                    ])
-        
-        # Save cv_results.json with aggregated per-class metrics
-        cv_results = {
-            "fold": fold,
-            "num_cases": len(val_cases),
-            "num_valid": len(all_dice_scores),
-            "mean_dice": float(np.mean(all_dice_scores)) if all_dice_scores else 0.0,
-            "std_dice": float(np.std(all_dice_scores)) if all_dice_scores else 0.0,
-            "per_class_dice": {},
-            "per_case_dice": {str(pid): float(s) for (pid, _, _), s in zip(val_cases, all_dice_scores)},
-        }
-        for c in range(num_classes - 1):
-            scores_c = [s for s in class_dice_scores[c] if not np.isnan(s)]
-            cv_results["per_class_dice"][f"class_{c+1}"] = {
-                "mean": float(np.mean(scores_c)) if scores_c else 0.0,
-                "std": float(np.std(scores_c)) if scores_c else 0.0,
-                "n": len(scores_c),
-            }
-        cv_json_path = output_path / "cv_results.json"
-        with open(cv_json_path, 'w') as f:
-            json.dump(cv_results, f, indent=2)
-        print(f"\n指标已保存到: {metrics_file}, {cv_json_path}")
-        print("=" * 60 + "\n")
-    else:
-        print("\n")
-
-    # Return the headline metric so callers (e.g. best-model selection in
-    # npc_sota_train) can use full-volume sliding-window Dice as the criterion.
-    if compute_metrics and len(all_dice_scores) > 0:
-        return float(np.mean(all_dice_scores))
-    return None
 
 
 def main() -> None:
@@ -499,8 +105,7 @@ def main() -> None:
     clip_upper = 300.0
     if args.spacing_params and Path(args.spacing_params).exists():
         try:
-            with open(args.spacing_params, 'r') as f:
-                params = json.load(f)
+            params = load_json(args.spacing_params)
             target_spacing = tuple(params['target_spacing'])
             clip_lower = params.get('clip_lower', clip_lower)
             clip_upper = params.get('clip_upper', clip_upper)
@@ -514,7 +119,7 @@ def main() -> None:
     use_cache = HAS_CACHED_DATASET and Path(cache_dir).exists() if cache_dir else False
     normalization = 'percentile' if use_cache else 'ct'  # Match training normalization
     if use_cache:
-        from npc_data_cached import CachedSOTADataset
+        from topocnv.data.dataset import CachedSOTADataset
         cases = _get_all_cases(DATA_ROOT_DEFAULT)
         patient_ids = [c[0] for c in cases]
         folds = _create_folds(patient_ids, num_folds=NUM_FOLDS, seed=42)

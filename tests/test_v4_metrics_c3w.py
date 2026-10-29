@@ -10,7 +10,7 @@ import numpy as np
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "MIA" / "scripts"))
 sys.path.insert(0, str(REPO))
-from metrics_protocol import _dice, _recall_gt3, _wdice, mask_Y, score_protocol  # noqa: E402
+from topocnv.metrics.protocol import _dice, _recall_gt3, _wdice, mask_Y, score_protocol  # noqa: E402
 import math  # noqa: E402
 
 

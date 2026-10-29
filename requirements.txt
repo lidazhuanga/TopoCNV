@@ -4,3 +4,5 @@ numpy>=1.24,<2
 scipy>=1.10
 nibabel>=5.0
 pynrrd>=1.0
+# 可选绘图依赖；仅数组指标和 NumPy overlay 不需要此库。
+matplotlib>=3.6

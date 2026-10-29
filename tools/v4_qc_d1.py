@@ -31,10 +31,10 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from trainer.v4.common import STAGE1_DIR, load_image  # noqa: E402
-from trainer.v4.priors import bilateral_c4_distance_mm  # noqa: E402
-from trainer.v4.roi import compute_case_roi, head_midline, landmark_mask_from_probs  # noqa: E402
-from trainer.v4.splits import N_INNER, internal_split, stage1_source  # noqa: E402
+from topocnv.data.utils import STAGE1_DIR, load_image  # noqa: E402
+from topocnv.priors import bilateral_c4_distance_mm  # noqa: E402
+from topocnv.priors.roi import compute_case_roi, head_midline, landmark_mask_from_probs  # noqa: E402
+from topocnv.data.v4_splits import N_INNER, internal_split, stage1_source  # noqa: E402
 
 MARGINS = (15, 25, 35)
 MIN_VALID_D = 90

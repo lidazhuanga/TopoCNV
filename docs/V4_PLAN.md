@@ -515,6 +515,7 @@ CT ──→ Stage 1（§10.3 规格：nnU-Net 5 类，嵌套；在统一标签�
 1. 厚度统一的方向：**已确认**（用户 2026-10-27，主会话转达）。叠加图：`results/v4_harm_v1/qa/montage_*.png`。
    - 确认记录：`configs/v4_harm/harm_v1_direction.json`（harm_v1.json 的 sha256、标签摘要、确认人、日期）。
    - `harm_v1.json` 本身不改，里面的 status 仍写着 draft：它的 sha256 已写进 manifest、Dataset540/541 的元数据和完成标记，改一个字节就会让整条链拒绝现有标签。方向以确认记录为准。
+   - 代码去向（2026-10-29）：校准记录的规则模块与构建工具在 V5 重构后已不是当时的字节。`configs/v4_harm/harm_v1_code_moves.json`（由 `tools/v4_harm_code_moves.py` 生成，write-once）记录新路径、新 sha256 与等价性证据（12 例真实标签 × 3 个 t 的输出逐字节相同；构建工具只剩 import 与 `code_sha256` 键的差异）；`harm_cache()` 只接受状态为 verified 的记录，并在每次调用时重核当前文件的 sha256。
 2. 主会话：参考标准变更涉及冻结的终点定义，需要同步协议和稿件口径。
 3. 类 3 占比上升 3 个点，C3W 和逐类结果需要按统一后的 GT 解读。
 4. 薄标注病例统一后仍低约 0.12（r0_dev，未重训）。R0u 出来后复查是否还有别的原因，例如这批病例大多没有可用 MRI。

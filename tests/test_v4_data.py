@@ -6,14 +6,14 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from trainer.v4.common import CACHE_DIR  # noqa: E402
-from trainer.v4.data import V4PatchDataset, stage1_target  # noqa: E402
-from trainer.v4.splits import all_cases  # noqa: E402
+from topocnv.data.utils import CACHE_DIR  # noqa: E402
+from topocnv.data.v4_dataset import V4PatchDataset, stage1_target  # noqa: E402
+from topocnv.data.v4_splits import all_cases  # noqa: E402
 
 
 class TestData(unittest.TestCase):
     def test_r0_matches_sota_dataset(self):
-        from npc_data_cached import CachedSOTADataset
+        from topocnv.data.dataset import CachedSOTADataset
         cases = all_cases()[:3]
         sota = CachedSOTADataset([(c, "", "") for c in cases], patch_size=(128, 128, 128),
                                  cache_dir=str(CACHE_DIR), training=True, random_crop_prob=0.33)
