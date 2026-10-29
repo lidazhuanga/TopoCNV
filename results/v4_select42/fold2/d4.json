@@ -1,0 +1,99 @@
+{
+ "protocol": "V4.2 / V4-AM-20261027-02",
+ "harm_config_sha256": "1ef730c305456e70bc9fb0309a5a5afb7681dcd6f0eccf4541ae9fe26981badf",
+ "harm_label_digest": "3a0abb6f98e13b6503830398335b25a30b80a1592e76c430ba643d274f388865",
+ "eval_gt": {
+  "gt": "harm_v1",
+  "gt_cache": "/cfs/zzkj/home/dkq/cnv/code/topocnv_remote/results/v4_harm_v1/sp_2.500_1.133_1.133",
+  "harm_config_sha256": "1ef730c305456e70bc9fb0309a5a5afb7681dcd6f0eccf4541ae9fe26981badf"
+ },
+ "step": "D4'",
+ "fold": 2,
+ "rule": "\u00a711.6.1",
+ "tol": 0.003,
+ "candidates": [
+  {
+   "name": "v42_r0u",
+   "trainer": "nnUNetTrainer_300epochs",
+   "dataset": "Dataset540_CNVv42binY",
+   "split": 7,
+   "fold_dir": "/cfs/zzkj/home/dkq/cnv/nnunet_cnv/nnUNet_results/Dataset540_CNVv42binY/nnUNetTrainer_300epochs__nnUNetPlans__3d_fullres/fold_7",
+   "n": 18,
+   "mean_dice_y": 0.683032801339031,
+   "mean_hd95_y": 4.982588847594064,
+   "csv": "results/v4_dev_eval_harm_v1/v42_r0u/fold2.csv",
+   "csv_sha256": "72190e718864761b2b186f34ef198923f88cb9530a54fd2d9d88b13fde604dc6",
+   "predictions_sha256": "eb8e443301122c50b9c7e4896420edeeb3dbd56d57403fae24298dae30e6063b",
+   "run_git_head": "046a2dcfd03cb082ec9106a17e11ec2ade7fca6e",
+   "run_dataset": {
+    "harm_config_sha256": "1ef730c305456e70bc9fb0309a5a5afb7681dcd6f0eccf4541ae9fe26981badf",
+    "harm_label_digest": "3a0abb6f98e13b6503830398335b25a30b80a1592e76c430ba643d274f388865",
+    "image_digest": "837023fa8b0d2b879ec1d5824e4be33202c47aa0bc9e3c06a49c64d926b62326",
+    "created": "2026-10-27T21:52:58.702237"
+   },
+   "role": "S0",
+   "level": 0
+  },
+  {
+   "name": "v42_s05",
+   "trainer": "nnUNetTrainerV4_noP_S05",
+   "dataset": "Dataset540_CNVv42binY",
+   "split": 7,
+   "fold_dir": "/cfs/zzkj/home/dkq/cnv/nnunet_cnv/nnUNet_results/Dataset540_CNVv42binY/nnUNetTrainerV4_noP_S05__nnUNetPlans__3d_fullres/fold_7",
+   "n": 18,
+   "mean_dice_y": 0.6776594342947886,
+   "mean_hd95_y": 3.6079111915681628,
+   "csv": "results/v4_dev_eval_harm_v1/v42_s05/fold2.csv",
+   "csv_sha256": "02cd17a4edbcdf905c75b12836ad8028ff8b3987bdc14155aa978da5e618953c",
+   "predictions_sha256": "44f7703d14b6ac0a00c0482744e7684ffc0c35495dd83f27474f54db88086e68",
+   "run_git_head": "046a2dcfd03cb082ec9106a17e11ec2ade7fca6e",
+   "run_dataset": {
+    "harm_config_sha256": "1ef730c305456e70bc9fb0309a5a5afb7681dcd6f0eccf4541ae9fe26981badf",
+    "harm_label_digest": "3a0abb6f98e13b6503830398335b25a30b80a1592e76c430ba643d274f388865",
+    "image_digest": "837023fa8b0d2b879ec1d5824e4be33202c47aa0bc9e3c06a49c64d926b62326",
+    "created": "2026-10-27T21:52:58.702237"
+   },
+   "role": "S05",
+   "level": 1
+  },
+  {
+   "name": "v42_s10",
+   "trainer": "nnUNetTrainerV4_noP_S10",
+   "dataset": "Dataset540_CNVv42binY",
+   "split": 7,
+   "fold_dir": "/cfs/zzkj/home/dkq/cnv/nnunet_cnv/nnUNet_results/Dataset540_CNVv42binY/nnUNetTrainerV4_noP_S10__nnUNetPlans__3d_fullres/fold_7",
+   "n": 18,
+   "mean_dice_y": 0.664518919516074,
+   "mean_hd95_y": 3.7439929669948415,
+   "csv": "results/v4_dev_eval_harm_v1/v42_s10/fold2.csv",
+   "csv_sha256": "ea0241559493797b31a07baf0b2a0a7d1877703033a6283135f904b37dbc9e80",
+   "predictions_sha256": "53482da6160ad8868baadddce14e3b588dbd27a85cd97e1d485dd4ae45447267",
+   "run_git_head": "046a2dcfd03cb082ec9106a17e11ec2ade7fca6e",
+   "run_dataset": {
+    "harm_config_sha256": "1ef730c305456e70bc9fb0309a5a5afb7681dcd6f0eccf4541ae9fe26981badf",
+    "harm_label_digest": "3a0abb6f98e13b6503830398335b25a30b80a1592e76c430ba643d274f388865",
+    "image_digest": "837023fa8b0d2b879ec1d5824e4be33202c47aa0bc9e3c06a49c64d926b62326",
+    "created": "2026-10-27T21:52:58.702237"
+   },
+   "role": "S10",
+   "level": 2
+  }
+ ],
+ "trace": {
+  "best": 0.683032801339031,
+  "eligible": [
+   "v42_r0u"
+  ],
+  "lowest_level": 0,
+  "level_candidates": [
+   "v42_r0u"
+  ]
+ },
+ "chosen": {
+  "name": "v42_r0u",
+  "w": "S0",
+  "trainer": "nnUNetTrainer_300epochs"
+ },
+ "tool_sha256": "4873e79a5568ea2b4ff2146369692e01150f69d6df165545746d3037061c9f7a",
+ "written": "2026-10-28T15:58:57.043244"
+}

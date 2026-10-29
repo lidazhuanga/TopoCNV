@@ -1,0 +1,99 @@
+{
+ "protocol": "V4.2 / V4-AM-20261027-02",
+ "harm_config_sha256": "1ef730c305456e70bc9fb0309a5a5afb7681dcd6f0eccf4541ae9fe26981badf",
+ "harm_label_digest": "3a0abb6f98e13b6503830398335b25a30b80a1592e76c430ba643d274f388865",
+ "eval_gt": {
+  "gt": "harm_v1",
+  "gt_cache": "/cfs/zzkj/home/dkq/cnv/code/topocnv_remote/results/v4_harm_v1/sp_2.500_1.133_1.133",
+  "harm_config_sha256": "1ef730c305456e70bc9fb0309a5a5afb7681dcd6f0eccf4541ae9fe26981badf"
+ },
+ "step": "D4'",
+ "fold": 0,
+ "rule": "\u00a711.6.1",
+ "tol": 0.003,
+ "candidates": [
+  {
+   "name": "v42_r0u",
+   "trainer": "nnUNetTrainer_300epochs",
+   "dataset": "Dataset540_CNVv42binY",
+   "split": 5,
+   "fold_dir": "/cfs/zzkj/home/dkq/cnv/nnunet_cnv/nnUNet_results/Dataset540_CNVv42binY/nnUNetTrainer_300epochs__nnUNetPlans__3d_fullres/fold_5",
+   "n": 18,
+   "mean_dice_y": 0.6640155419737748,
+   "mean_hd95_y": 4.262203780269598,
+   "csv": "results/v4_dev_eval_harm_v1/v42_r0u/fold0.csv",
+   "csv_sha256": "f138c495af67a8675da9ec0a82d70d914c29b4a11895e1dd6ef29431ed5ad4e8",
+   "predictions_sha256": "22d7bcc2bbe327b2f16b50d052de8f61fe508a70dc41888ffa89435913a3a154",
+   "run_git_head": "0e867ce114b6f15285ecec182d61382ed8d9b516",
+   "run_dataset": {
+    "harm_config_sha256": "1ef730c305456e70bc9fb0309a5a5afb7681dcd6f0eccf4541ae9fe26981badf",
+    "harm_label_digest": "3a0abb6f98e13b6503830398335b25a30b80a1592e76c430ba643d274f388865",
+    "image_digest": "837023fa8b0d2b879ec1d5824e4be33202c47aa0bc9e3c06a49c64d926b62326",
+    "created": "2026-10-27T21:52:58.702237"
+   },
+   "role": "S0",
+   "level": 0
+  },
+  {
+   "name": "v42_s05",
+   "trainer": "nnUNetTrainerV4_noP_S05",
+   "dataset": "Dataset540_CNVv42binY",
+   "split": 5,
+   "fold_dir": "/cfs/zzkj/home/dkq/cnv/nnunet_cnv/nnUNet_results/Dataset540_CNVv42binY/nnUNetTrainerV4_noP_S05__nnUNetPlans__3d_fullres/fold_5",
+   "n": 18,
+   "mean_dice_y": 0.6556564930772297,
+   "mean_hd95_y": 4.303276433581981,
+   "csv": "results/v4_dev_eval_harm_v1/v42_s05/fold0.csv",
+   "csv_sha256": "3a43839191d3e3e853ada16cb64b5bb95fa810595076f9f7d93cd9359609ca71",
+   "predictions_sha256": "817c71a093f35f3e144a3241c035eefb85bc4684c07fc79b70660e501d19f0af",
+   "run_git_head": "046a2dcfd03cb082ec9106a17e11ec2ade7fca6e",
+   "run_dataset": {
+    "harm_config_sha256": "1ef730c305456e70bc9fb0309a5a5afb7681dcd6f0eccf4541ae9fe26981badf",
+    "harm_label_digest": "3a0abb6f98e13b6503830398335b25a30b80a1592e76c430ba643d274f388865",
+    "image_digest": "837023fa8b0d2b879ec1d5824e4be33202c47aa0bc9e3c06a49c64d926b62326",
+    "created": "2026-10-27T21:52:58.702237"
+   },
+   "role": "S05",
+   "level": 1
+  },
+  {
+   "name": "v42_s10",
+   "trainer": "nnUNetTrainerV4_noP_S10",
+   "dataset": "Dataset540_CNVv42binY",
+   "split": 5,
+   "fold_dir": "/cfs/zzkj/home/dkq/cnv/nnunet_cnv/nnUNet_results/Dataset540_CNVv42binY/nnUNetTrainerV4_noP_S10__nnUNetPlans__3d_fullres/fold_5",
+   "n": 18,
+   "mean_dice_y": 0.6354427446895947,
+   "mean_hd95_y": 4.694872509192878,
+   "csv": "results/v4_dev_eval_harm_v1/v42_s10/fold0.csv",
+   "csv_sha256": "10ce3147582d6b81540f352d18ee64fcfaddd29992b5f3f60d8cdf7638feeda4",
+   "predictions_sha256": "581a4c457be8c6ec7de0c77f8c9c26b232a738e6659035fd64b02127d3be69a8",
+   "run_git_head": "046a2dcfd03cb082ec9106a17e11ec2ade7fca6e",
+   "run_dataset": {
+    "harm_config_sha256": "1ef730c305456e70bc9fb0309a5a5afb7681dcd6f0eccf4541ae9fe26981badf",
+    "harm_label_digest": "3a0abb6f98e13b6503830398335b25a30b80a1592e76c430ba643d274f388865",
+    "image_digest": "837023fa8b0d2b879ec1d5824e4be33202c47aa0bc9e3c06a49c64d926b62326",
+    "created": "2026-10-27T21:52:58.702237"
+   },
+   "role": "S10",
+   "level": 2
+  }
+ ],
+ "trace": {
+  "best": 0.6640155419737748,
+  "eligible": [
+   "v42_r0u"
+  ],
+  "lowest_level": 0,
+  "level_candidates": [
+   "v42_r0u"
+  ]
+ },
+ "chosen": {
+  "name": "v42_r0u",
+  "w": "S0",
+  "trainer": "nnUNetTrainer_300epochs"
+ },
+ "tool_sha256": "4873e79a5568ea2b4ff2146369692e01150f69d6df165545746d3037061c9f7a",
+ "written": "2026-10-28T14:42:44.420788"
+}

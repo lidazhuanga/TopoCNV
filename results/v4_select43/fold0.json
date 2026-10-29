@@ -1,0 +1,155 @@
+{
+ "protocol": "V4.3 / V4-AM-20261028-03",
+ "harm_config_sha256": "1ef730c305456e70bc9fb0309a5a5afb7681dcd6f0eccf4541ae9fe26981badf",
+ "harm_label_digest": "3a0abb6f98e13b6503830398335b25a30b80a1592e76c430ba643d274f388865",
+ "eval_gt": {
+  "gt": "harm_v1",
+  "gt_cache": "/cfs/zzkj/home/dkq/cnv/code/topocnv_remote/results/v4_harm_v1/sp_2.500_1.133_1.133",
+  "harm_config_sha256": "1ef730c305456e70bc9fb0309a5a5afb7681dcd6f0eccf4541ae9fe26981badf"
+ },
+ "step": "V4.3 dev",
+ "fold": 0,
+ "rule": "\u00a712.5",
+ "tol": 0.003,
+ "margin": 0.01,
+ "reference": {
+  "name": "v42_r0u",
+  "trainer": "nnUNetTrainer_300epochs",
+  "dataset": "Dataset540_CNVv42binY",
+  "split": 5,
+  "fold_dir": "/cfs/zzkj/home/dkq/cnv/nnunet_cnv/nnUNet_results/Dataset540_CNVv42binY/nnUNetTrainer_300epochs__nnUNetPlans__3d_fullres/fold_5",
+  "n": 18,
+  "mean_dice_y": 0.6640155419737748,
+  "mean_hd95_y": 4.262203780269598,
+  "csv": "results/v4_dev_eval_harm_v1/v42_r0u/fold0.csv",
+  "csv_sha256": "f138c495af67a8675da9ec0a82d70d914c29b4a11895e1dd6ef29431ed5ad4e8",
+  "predictions_sha256": "22d7bcc2bbe327b2f16b50d052de8f61fe508a70dc41888ffa89435913a3a154",
+  "run_git_head": "0e867ce114b6f15285ecec182d61382ed8d9b516",
+  "run_dataset": {
+   "harm_config_sha256": "1ef730c305456e70bc9fb0309a5a5afb7681dcd6f0eccf4541ae9fe26981badf",
+   "harm_label_digest": "3a0abb6f98e13b6503830398335b25a30b80a1592e76c430ba643d274f388865",
+   "image_digest": "837023fa8b0d2b879ec1d5824e4be33202c47aa0bc9e3c06a49c64d926b62326",
+   "created": "2026-10-27T21:52:58.702237"
+  }
+ },
+ "mri": {
+  "sums_sha256": "817b916d1c83a1f96ae0a62a901bdfced5cd5408bf534351ba54fddb846badc9",
+  "digest": "8dec87dd2b3a17c1ec1dcf5b618159452a22ea81726bff65d156af08e12110c8",
+  "frozen": "frozen 2026-10-28 15:45:03; 462 files in SHA256SUMS"
+ },
+ "candidates": [
+  {
+   "role": "MMd-1",
+   "name": "v43_mmd1",
+   "trainer": "nnUNetTrainerV43_MMd1",
+   "checkpoint_sha256": "dd83454bf340a4060ff478abe7fe9a92376e0018ab900dc6f3a28a2680e3cdf1",
+   "with_mri": {
+    "name": "v43_mmd1",
+    "trainer": "nnUNetTrainerV43_MMd1",
+    "dataset": "Dataset557_CNVv43mm",
+    "split": 5,
+    "fold_dir": "/cfs/zzkj/home/dkq/cnv/nnunet_cnv/nnUNet_results/Dataset557_CNVv43mm/nnUNetTrainerV43_MMd1__nnUNetPlans__3d_fullres/fold_5",
+    "n": 18,
+    "mean_dice_y": 0.6687647210648566,
+    "mean_hd95_y": 4.065675948277594,
+    "csv": "results/v4_dev_eval_harm_v1/v43_mmd1/fold0.csv",
+    "csv_sha256": "674a23c226af90e833b67026726cbbcd4d8742fca470a5afb27d15a87776ef27",
+    "predictions_sha256": "1e8d0d920172f4da3b0b367aea0f592fca4fb8046fdb32f38b4030796e7be5f8",
+    "run_git_head": "0156487df1e27868e22fcd22c133c369f04b87e3",
+    "run_dataset": {
+     "harm_config_sha256": "1ef730c305456e70bc9fb0309a5a5afb7681dcd6f0eccf4541ae9fe26981badf",
+     "harm_label_digest": "3a0abb6f98e13b6503830398335b25a30b80a1592e76c430ba643d274f388865",
+     "image_digest": "837023fa8b0d2b879ec1d5824e4be33202c47aa0bc9e3c06a49c64d926b62326",
+     "created": "2026-10-28T17:08:51.256870"
+    }
+   },
+   "no_mri": {
+    "name": "v43_mmd1_nomri",
+    "trainer": "nnUNetTrainerV43_MMd1",
+    "dataset": "Dataset557_CNVv43mm",
+    "split": 5,
+    "fold_dir": "/cfs/zzkj/home/dkq/cnv/nnunet_cnv/nnUNet_results/Dataset557_CNVv43mm/nnUNetTrainerV43_MMd1__nnUNetPlans__3d_fullres/fold_5",
+    "n": 18,
+    "mean_dice_y": 0.6628708643020552,
+    "mean_hd95_y": 4.224916993463456,
+    "csv": "results/v4_dev_eval_harm_v1/v43_mmd1_nomri/fold0.csv",
+    "csv_sha256": "b563151c9c49739a632d13351922d9c311eaadf3493acfd9d1fbf706db8c1115",
+    "predictions_sha256": "9ee828c972442e0dc48b0e6d7c3a7483f6a52be317cb57bf158140f8e94606b3",
+    "run_git_head": "0156487df1e27868e22fcd22c133c369f04b87e3",
+    "run_dataset": {
+     "harm_config_sha256": "1ef730c305456e70bc9fb0309a5a5afb7681dcd6f0eccf4541ae9fe26981badf",
+     "harm_label_digest": "3a0abb6f98e13b6503830398335b25a30b80a1592e76c430ba643d274f388865",
+     "image_digest": "837023fa8b0d2b879ec1d5824e4be33202c47aa0bc9e3c06a49c64d926b62326",
+     "created": "2026-10-28T17:08:51.256870"
+    }
+   }
+  },
+  {
+   "role": "MMd-2",
+   "name": "v43_mmd2",
+   "trainer": "nnUNetTrainerV43_MMd2",
+   "checkpoint_sha256": "b68fdac9fd69b5b523d33c4ef481895a62b59b64b6fa225fd18279337a600217",
+   "with_mri": {
+    "name": "v43_mmd2",
+    "trainer": "nnUNetTrainerV43_MMd2",
+    "dataset": "Dataset557_CNVv43mm",
+    "split": 5,
+    "fold_dir": "/cfs/zzkj/home/dkq/cnv/nnunet_cnv/nnUNet_results/Dataset557_CNVv43mm/nnUNetTrainerV43_MMd2__nnUNetPlans__3d_fullres/fold_5",
+    "n": 18,
+    "mean_dice_y": 0.6667303999894365,
+    "mean_hd95_y": 4.333621046686632,
+    "csv": "results/v4_dev_eval_harm_v1/v43_mmd2/fold0.csv",
+    "csv_sha256": "4f445295d0cec890b71a28d76b81bb98032a9401b13a28bca49e110fe9102856",
+    "predictions_sha256": "65b0d83c8a8a6ee8976fd09af59f40143d8b957d6ee6e6ed2ca34c91bdbc854d",
+    "run_git_head": "0156487df1e27868e22fcd22c133c369f04b87e3",
+    "run_dataset": {
+     "harm_config_sha256": "1ef730c305456e70bc9fb0309a5a5afb7681dcd6f0eccf4541ae9fe26981badf",
+     "harm_label_digest": "3a0abb6f98e13b6503830398335b25a30b80a1592e76c430ba643d274f388865",
+     "image_digest": "837023fa8b0d2b879ec1d5824e4be33202c47aa0bc9e3c06a49c64d926b62326",
+     "created": "2026-10-28T17:08:51.256870"
+    }
+   },
+   "no_mri": {
+    "name": "v43_mmd2_nomri",
+    "trainer": "nnUNetTrainerV43_MMd2",
+    "dataset": "Dataset557_CNVv43mm",
+    "split": 5,
+    "fold_dir": "/cfs/zzkj/home/dkq/cnv/nnunet_cnv/nnUNet_results/Dataset557_CNVv43mm/nnUNetTrainerV43_MMd2__nnUNetPlans__3d_fullres/fold_5",
+    "n": 18,
+    "mean_dice_y": 0.665323523869875,
+    "mean_hd95_y": 4.33438396385282,
+    "csv": "results/v4_dev_eval_harm_v1/v43_mmd2_nomri/fold0.csv",
+    "csv_sha256": "eaa27a4c405b984af438665fb74e362c62c0ec55bd581ed62c6b6103b0fd6a7c",
+    "predictions_sha256": "229c26a8d738344de15a6f5ee9853549c9b2f81df78702a6ddcbf7290bb9b6dc",
+    "run_git_head": "0156487df1e27868e22fcd22c133c369f04b87e3",
+    "run_dataset": {
+     "harm_config_sha256": "1ef730c305456e70bc9fb0309a5a5afb7681dcd6f0eccf4541ae9fe26981badf",
+     "harm_label_digest": "3a0abb6f98e13b6503830398335b25a30b80a1592e76c430ba643d274f388865",
+     "image_digest": "837023fa8b0d2b879ec1d5824e4be33202c47aa0bc9e3c06a49c64d926b62326",
+     "created": "2026-10-28T17:08:51.256870"
+    }
+   }
+  }
+ ],
+ "trace": {
+  "eligible": [
+   "v43_mmd1",
+   "v43_mmd2"
+  ],
+  "threshold": 0.6540155419737748,
+  "best_with_mri_among_eligible": 0.6687647210648566,
+  "within_tol": [
+   "v43_mmd1",
+   "v43_mmd2"
+  ],
+  "robustness_met": true
+ },
+ "chosen": {
+  "role": "MMd-1",
+  "name": "v43_mmd1",
+  "trainer": "nnUNetTrainerV43_MMd1",
+  "case_trainer": "nnUNetTrainerV43_MMdcase1"
+ },
+ "tool_sha256": "ea885af1159507c6c6ec0af7ae1dcddc480d47a924ecfda0b5b12290e17f0984",
+ "written": "2026-10-29T10:01:15.336557"
+}
